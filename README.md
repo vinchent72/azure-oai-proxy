@@ -8,45 +8,49 @@
 
 ## Introduction
 
-Azure OAI Proxy is a lightweight, high-performance proxy server that enables seamless integration between Azure OpenAI Services and applications designed for OpenAI API only compatible endpoints. This project bridges the gap for tools and services that are built to work with OpenAI's API structure but need to utilize Azure's OpenAI services, including support for the latest reasoning models through Azure's Responses API.
+Azure OAI Proxy is a lightweight, high-performance proxy server that enables seamless integration with **Microsoft Azure AI Foundry** (serverless deployments). It translates OpenAI API format requests into Azure Foundry endpoints, allowing applications built for OpenAI's API to work seamlessly with Azure's managed AI services.
+
+The proxy provides full support for the complete Microsoft Foundry model catalog, including GPT-5.x, reasoning models (O-series), Claude models, embeddings, audio, video, and specialized models—all through a unified serverless architecture.
 
 ## Key Features
 
--   ✅ **API Compatibility**: Translates requests from OpenAI API format to Azure OpenAI Services format on-the-fly.
--   🧠 **Advanced Reasoning Model Support**: Full support for Azure's advanced reasoning models (O1, O3, O4 series) through automatic Responses API integration.
--   📡 **Streaming Support**: Real-time streaming for both traditional chat models and reasoning models with proper format conversion.
--   🗺️ **Model Mapping**: Automatically maps OpenAI model names to Azure scheme, with a comprehensive failsafe list.
--   🔄 **Dynamic Model List**: Fetches available models directly from your Azure OpenAI deployment using a dedicated API version.
--   🌐 **Support for Multiple Endpoints**: Handles various API endpoints including image, speech, completions, chat completions, embeddings, responses API, and more.
--   🚦 **Error Handling**: Provides meaningful error messages and logging for easier debugging.
--   ⚙️ **Configurable**: Easy to set up with environment variables for Azure AI/Azure OAI endpoint, API keys, and API versions.
--   🔐 **Serverless Deployment Support**: Supports Azure AI serverless deployments with custom authentication.
--   🔀 **Automatic API Selection**: Intelligently routes requests to Chat Completions API or Responses API based on model capabilities.
+-   ✅ **Microsoft Foundry Integration**: Seamlessly routes requests to Azure AI Foundry (serverless) endpoints.
+-   ✅ **Comprehensive Model Support**: 200+ model variants including GPT-5.x, O-series, Claude, embeddings, audio, video, and specialized models.
+-   🧠 **Advanced Reasoning Models**: Full support for O1, O3, O4 series and reasoning models through Responses API.
+-   📡 **Streaming Support**: Real-time streaming for all model types with proper format conversion.
+-   🗺️ **Intelligent Model Mapping**: Automatically maps OpenAI model names to Foundry deployments with comprehensive built-in model list.
+-   🌐 **Multi-API Support**: Handles chat completions, embeddings, image/video generation, audio, and more.
+-   🚦 **Error Handling**: Meaningful error messages and detailed logging for debugging.
+-   ⚙️ **Simple Configuration**: Easy setup with environment variables for region, API version, and custom mappings.
+-   🔐 **Bearer Token Authentication**: Standard Azure Foundry authentication for all requests.
 
 ## Use Cases
 
 This proxy is particularly useful for:
 
--   Running applications like Open WebUI with Azure OpenAI Services, including advanced reasoning models like O3 and O1.
--   Seamlessly using Azure's latest reasoning models in tools built for OpenAI API.
--   Testing Azure OpenAI capabilities using tools built for the OpenAI API.
--   Transitioning projects from OpenAI to Azure OpenAI with minimal code changes.
--   Accessing Azure-exclusive models and features through familiar OpenAI interfaces.
+-   Running applications like Open WebUI, LangChain, or other OpenAI-compatible tools with Azure Foundry deployments.
+-   Using Microsoft's latest reasoning models (O3, O4) through OpenAI-compatible interfaces.
+-   Leveraging Claude models on Azure Foundry in applications built for OpenAI API.
+-   Testing Azure Foundry capabilities without modifying existing OpenAI-based applications.
+-   Cost-effective managed deployments: Foundry serverless handles scaling automatically.
+-   Multi-model workloads: Switch between GPT, Claude, Phi, and specialized models seamlessly.
 
-## Important Note
+## Architecture
 
-While azure oai proxy serves as a convenient bridge, it's recommended to use the official Azure OpenAI SDK or API directly in production environments or when building new services.
+Azure OAI Proxy uses a simple routing model:
 
-Direct integration offers:
+```
+OpenAI API Request → Proxy → Microsoft Azure Foundry
+(http://localhost:11437)      (https://{deployment}.{region}.models.ai.azure.com)
+```
 
--   Better performance
--   More reliable and up-to-date feature support
--   Simplified architecture with one less component to maintain
--   Direct access to Azure-specific features and optimizations
-
-This proxy is ideal for testing, development, and scenarios where modifying the original application to use Azure OpenAI directly is not feasible.
-
-Also, I strongly recommend using TLS/SSL for secure communication between the proxy and the client. This is especially important when using the proxy in a production environment (even though you shouldn't but well, here you are anyway). TBD: Add docker compose including nginx proxy manager.
+**Request Flow:**
+1. Receive request in OpenAI format (e.g., `/v1/chat/completions`)
+2. Extract model name from request body
+3. Look up Foundry deployment name in model mapper
+4. Route to Foundry endpoint: `https://{deployment}.{region}.models.ai.azure.com/{endpoint}?api-version=2024-08-01-preview`
+5. Convert authentication (api-key → Bearer token)
+6. Forward request and convert response back to OpenAI format
 
 ## Supported APIs
 
@@ -70,43 +74,39 @@ The latest version of the Azure OpenAI service supports the following APIs:
 | /v1/audio/translations             | ✅     |       |
 | /v1/models/:model_id/capabilities | ✅     |       |
 
-## Model Support & API Routing
+## Model Support
 
-The proxy automatically detects model capabilities and routes requests appropriately:
+The proxy supports **200+ model variants** across all Microsoft Foundry categories:
 
-### Traditional Models (Chat Completions API)
-- **GPT-5.2 series**: gpt-5.2, gpt-5.2-chat (NEW - Preview)
-- **GPT-5.1 series**: gpt-5.1, gpt-5.1-chat (NEW)
-- **GPT-5 series**: gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-chat
+### GPT Series (Chat Completions API)
+- **GPT-5.5 series** (Latest): gpt-5.5, gpt-5.5-mini, gpt-5.5-nano, gpt-5.5-chat
+- **GPT-5.4 series**: gpt-5.4, gpt-5.4-mini, gpt-5.4-nano, gpt-5.4-chat
+- **GPT-5.3 series**: gpt-5.3, gpt-5.3-mini, gpt-5.3-nano, gpt-5.3-chat
+- **GPT-5.x series**: gpt-5.2, gpt-5.1, gpt-5 (all variants)
 - **GPT-4.1 series**: gpt-4.1, gpt-4.1-mini, gpt-4.1-nano
-- **GPT-4o series**: gpt-4o, gpt-4o-mini, gpt-4o-2024-11-20, etc.
-- **GPT-4 series**: gpt-4, gpt-4-turbo, gpt-4-32k, etc.
-- **GPT-3.5 series**: gpt-3.5-turbo, gpt-3.5-turbo-16k, etc.
-- **Claude series** (Azure Foundry - Chat Completions API): claude-opus-4.5, claude-sonnet-4.5, claude-haiku-4.5, claude-opus-4.1
-  - ⚠️ **Note**: Claude models must be deployed in your Azure Foundry account first
-  - Claude uses **Chat Completions API** (NOT Responses API)
-  - Deployment name must match your Azure deployment (e.g., use `AZURE_OPENAI_MODEL_MAPPER` if needed)
-- **Phi series** (Azure Foundry): phi-3, phi-3-mini, phi-3-small, phi-3-medium, phi-4
-- **Open Source Models**: Mistral, Llama, gpt-oss-120b, gpt-oss-20b (via serverless/managed deployments)
+- **GPT-4o series**: gpt-4o, gpt-4o-mini (with date variants)
+- **GPT-4 series**: gpt-4, gpt-4-turbo, gpt-4-32k (all variants)
+- **GPT-3.5 series**: gpt-3.5-turbo, gpt-3.5-turbo-16k (all variants)
 
 ### Reasoning Models (Responses API)
-- **O1 Series**: o1, o1-preview, o1-mini
-- **O3 Series**: o3, o3-pro, o3-mini, o3-deep-research
-- **O4 Series**: o4, o4-mini
-- **Codex Models**: codex-mini, gpt-5.1-codex, gpt-5.1-codex-mini, gpt-5.1-codex-max, gpt-5-codex
-- **Specialized**: computer-use-preview, gpt-5-pro
+- **O-Series**: o1, o1-preview, o1-mini, o3, o3-mini, o3-pro, o3-deep-research, o4, o4-mini
+- **Specialized**: codex-mini, gpt-5.x-codex variants, computer-use-preview, gpt-5-pro
 
-### Audio Models
-- **Realtime Audio**: gpt-4o-realtime-preview, gpt-4o-mini-realtime-preview, gpt-realtime, gpt-realtime-mini
-- **Audio Generation**: gpt-4o-audio-preview, gpt-4o-mini-audio-preview, gpt-audio, gpt-audio-mini
-- **Speech-to-Text**: gpt-4o-transcribe, gpt-4o-mini-transcribe, gpt-4o-transcribe-diarize, whisper
-- **Text-to-Speech**: gpt-4o-mini-tts, tts, tts-hd
+### Claude Models (Anthropic Messages API)
+- **Latest**: claude-opus-4.5, claude-sonnet-4.5, claude-haiku-4.5
+- **Opus 4.1**: claude-opus-4.1
+- ℹ️ Automatically converted from OpenAI chat format to Anthropic Messages API
 
-### Image & Video Generation
-- **Image Generation**: gpt-image-1, gpt-image-1-mini, dall-e-2, dall-e-3
-- **Video Generation**: sora, sora-2
+### Other Models
+- **Embeddings**: text-embedding-3-small, text-embedding-3-large, text-embedding-ada-002
+- **Image Generation**: dall-e-2, dall-e-3, gpt-image-1, gpt-image-1-mini
+- **Video**: sora, sora-2 (with date variants)
+- **Audio**: gpt-4o-audio-preview, gpt-4o-realtime-preview, gpt-audio, gpt-realtime, whisper
+- **Speech-to-Text**: gpt-4o-transcribe, gpt-4o-transcribe-diarize
+- **Text-to-Speech**: tts, tts-hd, gpt-4o-mini-tts
+- **Open Source**: phi-3, phi-3-mini, phi-3-small, phi-3-medium, phi-4, gpt-oss-120b, gpt-oss-20b
 
-*Reasoning models automatically use Azure's Responses API while maintaining OpenAI chat completion interface compatibility.*
+*For a complete list, see the [model mapper](pkg/azure/proxy.go#L180) in the code.*
 
 ## Configuration
 
@@ -114,140 +114,190 @@ The proxy automatically detects model capabilities and routes requests appropria
 
 | Parameter                       | Description                                                    | Default Value    | Required |
 | :------------------------------ | :------------------------------------------------------------- | :--------------- | :------- |
-| AZURE_OPENAI_ENDPOINT           | Azure OpenAI Endpoint                                          |                  | Yes      |
-| AZURE_OPENAI_PROXY_ADDRESS      | Service listening address                                      | 0.0.0.0:11437    | No       |
-| AZURE_OPENAI_PROXY_MODE         | Proxy mode, can be either "azure" or "openai"                 | azure            | No       |
-| AZURE_OPENAI_APIVERSION         | Azure OpenAI API version (for general operations)             | 2024-08-01-preview | No       |
-| AZURE_OPENAI_MODELS_APIVERSION  | Azure OpenAI API version (for fetching models)                | 2024-10-21       | No       |
-| AZURE_OPENAI_RESPONSES_APIVERSION | Azure OpenAI API version (for Responses API/O-series)       | 2024-08-01-preview | No       |
+| AZURE_FOUNDRY_REGION            | Azure Foundry region (e.g., westus, eastus, northcentralus)   | westus           | No       |
+| AZURE_OPENAI_APIVERSION         | Foundry API version                                            | 2024-08-01-preview | No       |
 | ANTHROPIC_APIVERSION            | Anthropic API version (for Claude models)                      | 2023-06-01       | No       |
-| AZURE_OPENAI_MODEL_MAPPER       | Comma-separated list of model=deployment pairs                 |                  | No       |
-| AZURE_AI_STUDIO_DEPLOYMENTS     | Comma-separated list of serverless deployments                 |                  | No       |
-| AZURE_OPENAI_KEY_\*             | API keys for serverless deployments (replace \* with uppercase model name) |                  | No       |
+| AZURE_OPENAI_PROXY_ADDRESS      | Proxy server listening address                                 | 0.0.0.0:11437    | No       |
+| AZURE_OPENAI_MODEL_MAPPER       | Comma-separated list of model=deployment pairs (optional overrides) |                  | No       |
+
+### How It Works
+
+1. **Region**: Set `AZURE_FOUNDRY_REGION` to your Foundry region. Default is `westus`.
+2. **Models**: The proxy includes 200+ built-in model mappings. Use `AZURE_OPENAI_MODEL_MAPPER` to override for custom deployments.
+3. **Authentication**: Pass your Foundry API key as Bearer token or `api-key` header. The proxy converts it automatically.
+4. **API Version**: Unified `AZURE_OPENAI_APIVERSION` is used for all Foundry endpoints. `ANTHROPIC_APIVERSION` is used only for Claude models.
+
+### Example Custom Model Mappings
+
+If you have custom deployment names, override them:
+
+```
+AZURE_OPENAI_MODEL_MAPPER=my-gpt=my-gpt-deployment,my-claude=my-claude-deployment
+```
 
 ## Usage
 
-### Docker Compose
+### Quick Start with Docker Compose
 
-⚠️ **Important**: When using Docker, you must set the API version environment variables in your compose file to override the defaults. Older Docker images may have outdated API versions hardcoded.
-
-Here's an example `docker-compose.yml` file with all possible environment variable options:
-
-```yaml
-services:
-  azure-oai-proxy:
-    image: 'gyarbij/azure-oai-proxy:latest'
-    # container_name: azure-oai-proxy
-    # Alternatively, use GitHub Container Registry:
-    # image: 'ghcr.io/gyarbij/azure-oai-proxy:latest'
-    restart: always
-    environment:
-      - AZURE_OPENAI_ENDPOINT=https://your-endpoint.openai.azure.com/
-      - AZURE_OPENAI_APIVERSION=2024-08-01-preview
-      - AZURE_OPENAI_MODELS_APIVERSION=2024-10-21
-      - AZURE_OPENAI_RESPONSES_APIVERSION=2024-08-01-preview
-      - ANTHROPIC_APIVERSION=2023-06-01
-      # - AZURE_OPENAI_PROXY_ADDRESS=0.0.0.0:11437
-      # - AZURE_OPENAI_PROXY_MODE=azure
-      # - AZURE_OPENAI_MODEL_MAPPER=gpt-3.5-turbo=gpt-35-turbo,gpt-4=gpt-4-turbo
-      # - AZURE_AI_STUDIO_DEPLOYMENTS=mistral-large-2407=Mistral-large2:swedencentral,llama-3.1-405B=Meta-Llama-3-1-405B-Instruct:northcentralus,claude-sonnet-4.5=Claude-Sonnet-45:eastus2
-      # - AZURE_OPENAI_KEY_MISTRAL-LARGE-2407=your-api-key-1
-      # - AZURE_OPENAI_KEY_LLAMA-3.1-405B=your-api-key-2
-      # - AZURE_OPENAI_KEY_CLAUDE-SONNET-4.5=your-api-key-3
-    ports:
-      - '11437:11437'
-    # Uncomment the following line to use an .env file:
-    # env_file: .env
-```
-
-To use this configuration:
-
-1.  Save the above content in a file named `compose.yaml`.
-2.  Replace the placeholder values (e.g., `your-endpoint`, `your-api-key-1`, etc.) with your actual Azure OpenAI configuration.
-3.  Run the following command in the same directory as your `compose.yaml` file:
+1. **Using the provided compose.yaml:**
 
 ```sh
 docker compose up -d
 ```
 
-### Using an .env File
+2. **Custom region:**
 
-To use an .env file instead of environment variables in the Docker Compose file:
+```sh
+AZURE_FOUNDRY_REGION=eastus docker compose up -d
+```
 
-1.  Create a file named `.env` in the same directory as your `docker-compose.yml`.
-2.  Add your environment variables to the `.env` file, one per line:
+3. **Or create a .env file:**
 
 ```
-AZURE_OPENAI_ENDPOINT=https://your-endpoint.openai.azure.com/
+AZURE_FOUNDRY_REGION=westus
 AZURE_OPENAI_APIVERSION=2024-08-01-preview
-AZURE_OPENAI_MODELS_APIVERSION=2024-10-21
-AZURE_OPENAI_RESPONSES_APIVERSION=2024-08-01-preview
 ANTHROPIC_APIVERSION=2023-06-01
-AZURE_AI_STUDIO_DEPLOYMENTS=mistral-large-2407=Mistral-large2:swedencentral,llama-3.1-405B=Meta-Llama-3-1-405B-Instruct:northcentralus,claude-sonnet-4.5=Claude-Sonnet-45:eastus2
-AZURE_OPENAI_KEY_MISTRAL-LARGE-2407=your-api-key-1
-AZURE_OPENAI_KEY_LLAMA-3.1-405B=your-api-key-2
-AZURE_OPENAI_KEY_CLAUDE-SONNET-4.5=your-api-key-3
 ```
 
-3.  Uncomment the `env_file: .env` line in your `docker-compose.yml`.
-4.  Run `docker-compose up -d` to start the container with the environment variables from the .env file.
+Then run:
+```sh
+docker compose up -d
+```
 
-### Running from GitHub Container Registry
-
-To run the Azure OAI Proxy using the image from GitHub Container Registry:
+### Docker Command
 
 ```sh
 docker run -d -p 11437:11437 \
- -e AZURE_OPENAI_ENDPOINT=https://your-endpoint.openai.azure.com/ \
- -e AZURE_OPENAI_MODELS_APIVERSION=2024-10-21 \
- -e AZURE_AI_STUDIO_DEPLOYMENTS=mistral-large-2407=Mistral-large2:swedencentral \
- -e AZURE_OPENAI_KEY_MISTRAL-LARGE-2407=your-api-key \
- ghcr.io/gyarbij/azure-oai-proxy:latest
+  -e AZURE_FOUNDRY_REGION=westus \
+  -e AZURE_OPENAI_APIVERSION=2024-08-01-preview \
+  ghcr.io/gyarbij/azure-oai-proxy:latest
 ```
 
-Replace the placeholder values with your actual Azure OpenAI configuration.
+### Configuration in Docker Compose
 
-## Usage Examples
+See [compose.yaml](compose.yaml) for a pre-configured example with all supported environment variables documented.
 
-### Calling the API
+## API Examples
 
-Once the proxy is running, you can call it using the OpenAI API format:
+All examples use standard OpenAI API format. The proxy automatically routes to the appropriate Foundry endpoint.
 
-#### Traditional Chat Models (GPT-4o, GPT-4, etc.)
-```sh
+### GPT Model (Chat Completions)
+
+```bash
 curl http://localhost:11437/v1/chat/completions \
- -H "Content-Type: application/json" \
- -H "Authorization: Bearer your-azure-api-key" \
- -d '{
-  "model": "gpt-4o",
-  "messages": [{"role": "user", "content": "Hello!"}]
- }'
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-foundry-api-key" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
 ```
 
-#### Claude Models (Azure Foundry)
+### Reasoning Model (O-Series)
 
-⚠️ **Important for Claude Models:**
-- Claude models must be **deployed in your Azure Foundry account** before use
-- They use the **Anthropic Messages API** (automatically converted from OpenAI chat completions format)
-- The proxy automatically handles the conversion - just use the standard OpenAI format
-- Requests are routed to `/anthropic/v1/messages` endpoint
-- Responses are automatically converted back to OpenAI chat completion format
+The proxy automatically routes O-series models through the Responses API while maintaining OpenAI format compatibility.
 
-**Example - Standard OpenAI Format Works Seamlessly:**
-```sh
+```bash
 curl http://localhost:11437/v1/chat/completions \
- -H "Content-Type: application/json" \
- -H "Authorization: Bearer your-azure-api-key" \
- -d '{
-  "model": "claude-sonnet-4.5",
-  "messages": [{"role": "user", "content": "Explain quantum computing in simple terms"}],
-  "max_tokens": 1000
- }'
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-foundry-api-key" \
+  -d '{
+    "model": "o3-mini",
+    "messages": [{"role": "user", "content": "Solve this math problem: 2+2"}],
+    "max_tokens": 2000
+  }'
 ```
 
-**Behind the scenes:**
-- Request is automatically converted to Anthropic Messages API format
-- Routed to `https://your-endpoint.services.ai.azure.com/anthropic/v1/messages` (no Azure api-version query parameter)
+### Claude Model (Anthropic Messages API)
+
+The proxy automatically converts from OpenAI format to Anthropic Messages API internally.
+
+```bash
+curl http://localhost:11437/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-foundry-api-key" \
+  -d '{
+    "model": "claude-sonnet-4.5",
+    "messages": [{"role": "user", "content": "Explain quantum computing"}],
+    "max_tokens": 1000
+  }'
+```
+
+### Embeddings
+
+```bash
+curl http://localhost:11437/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-foundry-api-key" \
+  -d '{
+    "model": "text-embedding-3-small",
+    "input": "Hello, world!"
+  }'
+```
+
+### Image Generation
+
+```bash
+curl http://localhost:11437/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-foundry-api-key" \
+  -d '{
+    "model": "dall-e-3",
+    "prompt": "A beautiful sunset",
+    "n": 1,
+    "size": "1024x1024"
+  }'
+```
+
+### Streaming
+
+Add `"stream": true` to enable streaming responses:
+
+```bash
+curl http://localhost:11437/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-foundry-api-key" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Count to 10"}],
+    "stream": true
+  }'
+```
+
+## Security Recommendations
+
+1. **Always use TLS/SSL** in production. Configure a reverse proxy (nginx, Caddy) with SSL termination in front of the proxy.
+2. **Protect your API key**: Never expose your Foundry API key in client-side code.
+3. **Firewall**: Restrict access to the proxy port to trusted networks only.
+4. **Rate limiting**: Consider adding rate limiting middleware for production deployments.
+
+## Troubleshooting
+
+### Check Logs
+
+```sh
+docker logs $(docker ps --filter "ancestor=ghcr.io/gyarbij/azure-oai-proxy:latest" -q)
+```
+
+### Verify Foundry Connectivity
+
+Ensure you can reach your Foundry deployment:
+
+```bash
+curl -H "Authorization: Bearer your-api-key" \
+  "https://your-deployment.westus.models.ai.azure.com/chat/completions?api-version=2024-08-01-preview" \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"test"}]}'
+```
+
+### Common Issues
+
+| Issue | Solution |
+|-------|----------|
+| "Model not found" | Ensure the model is available in your Foundry region. Check the model mapper in proxy.go. |
+| "Authentication failed" | Verify your API key is correct and has permissions for the Foundry region. |
+| "Connection refused" | Check that the Foundry endpoint is correct (region, deployment name). |
+| "Claude responses fail" | Claude must be deployed separately in Azure Foundry. Check model mapper configuration. |
 - Response is converted back to OpenAI chat completion format
 - System messages are extracted and passed as the `system` parameter
 - Headers are automatically adjusted (`x-api-key`, `anthropic-version: 2023-06-01`)

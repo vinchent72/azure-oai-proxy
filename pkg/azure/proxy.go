@@ -19,62 +19,90 @@ import (
 )
 
 var (
-	AzureOpenAIAPIVersion          = "2024-08-01-preview" // API version for proxying requests - supports Azure Foundry features
-	AzureOpenAIModelsAPIVersion    = "2024-10-21"         // API version for fetching models
-	AzureOpenAIResponsesAPIVersion = "2024-08-01-preview" // API version for Responses API - supports O-series models
-	AnthropicAPIVersion            = "2023-06-01"         // Anthropic API version for Claude models
-	AzureOpenAIEndpoint            = ""
-	ServerlessDeploymentInfo       = make(map[string]ServerlessDeployment)
-	AzureOpenAIModelMapper         = make(map[string]string)
+	// Foundry API Configuration
+	FoundryAPIVersion    = "2024-08-01-preview" // Single API version for all Foundry endpoints (chat, responses, etc.)
+	FoundryRegion        = "westus"             // Default region for Foundry deployments
+	AnthropicAPIVersion  = "2023-06-01"         // Anthropic API version for Claude models
+	FoundryModelMapper   = make(map[string]string) // Maps OpenAI model names to Foundry deployment names
 )
 
-type ServerlessDeployment struct {
-	Name   string
-	Region string
-	Key    string
-}
-
 func init() {
+	// Load API version from environment
 	if v := os.Getenv("AZURE_OPENAI_APIVERSION"); v != "" {
-		AzureOpenAIAPIVersion = v
+		FoundryAPIVersion = v
 	}
-	if v := os.Getenv("AZURE_OPENAI_MODELS_APIVERSION"); v != "" {
-		AzureOpenAIModelsAPIVersion = v
+	
+	// Load region from environment (defaults to eastus)
+	if v := os.Getenv("AZURE_FOUNDRY_REGION"); v != "" {
+		FoundryRegion = v
 	}
-	if v := os.Getenv("AZURE_OPENAI_RESPONSES_APIVERSION"); v != "" {
-		AzureOpenAIResponsesAPIVersion = v
-	}
+	
+	// Load Anthropic API version if specified
 	if v := os.Getenv("ANTHROPIC_APIVERSION"); v != "" {
 		AnthropicAPIVersion = v
 	}
-	if v := os.Getenv("AZURE_OPENAI_ENDPOINT"); v != "" {
-		AzureOpenAIEndpoint = v
-	}
 
-	if v := os.Getenv("AZURE_AI_STUDIO_DEPLOYMENTS"); v != "" {
+	// Load custom model mappings if specified
+	if v := os.Getenv("AZURE_OPENAI_MODEL_MAPPER"); v != "" {
 		for _, pair := range strings.Split(v, ",") {
-			info := strings.Split(pair, "=")
-			if len(info) == 2 {
-				deploymentInfo := strings.Split(info[1], ":")
-				if len(deploymentInfo) == 2 {
-					ServerlessDeploymentInfo[strings.ToLower(info[0])] = ServerlessDeployment{
-						Name:   deploymentInfo[0],
-						Region: deploymentInfo[1],
-						Key:    os.Getenv("AZURE_OPENAI_KEY_" + strings.ToUpper(info[0])),
-					}
-				}
+			parts := strings.Split(pair, "=")
+			if len(parts) == 2 {
+				FoundryModelMapper[strings.ToLower(strings.TrimSpace(parts[0]))] = strings.TrimSpace(parts[1])
+				log.Printf("Custom model mapping: %s -> %s", parts[0], parts[1])
 			}
 		}
 	}
 
-	// Initialize AzureOpenAIModelMapper with updated model list and hardcode as failsafe
-	AzureOpenAIModelMapper = map[string]string{
-		// GPT-5.2 series (NEW)
+	// Initialize FoundryModelMapper with comprehensive model list
+	// This serves as the default mapping for all supported models
+	initializeModelMapper()
+
+	log.Printf("========== FOUNDRY PROXY INITIALIZED ==========")
+	log.Printf("Routing: Microsoft Foundry (serverless)")
+	log.Printf("Region: %s", FoundryRegion)
+	log.Printf("API Version: %s", FoundryAPIVersion)
+	log.Printf("Anthropic API Version: %s", AnthropicAPIVersion)
+	log.Printf("Total models in mapper: %d", len(FoundryModelMapper))
+	log.Printf("=============================================")
+}
+
+// initializeModelMapper populates the Foundry model mapper with all supported models
+// This is called during init() after custom mappings are loaded from environment
+func initializeModelMapper() {
+	defaultModels := map[string]string{
+		// GPT-5.5 series (NEW)
+		"gpt-5.5":                 "gpt-5.5",
+		"gpt-5.5-2026-06-10":      "gpt-5.5-2026-06-10",
+		"gpt-5.5-chat":            "gpt-5.5-chat",
+		"gpt-5.5-chat-2026-06-10": "gpt-5.5-chat-2026-06-10",
+		"gpt-5.5-mini":            "gpt-5.5-mini",
+		"gpt-5.5-mini-2026-06-10": "gpt-5.5-mini-2026-06-10",
+		"gpt-5.5-nano":            "gpt-5.5-nano",
+		"gpt-5.5-nano-2026-06-10": "gpt-5.5-nano-2026-06-10",
+		// GPT-5.4 series
+		"gpt-5.4":                 "gpt-5.4",
+		"gpt-5.4-2026-03-20":      "gpt-5.4-2026-03-20",
+		"gpt-5.4-chat":            "gpt-5.4-chat",
+		"gpt-5.4-chat-2026-03-20": "gpt-5.4-chat-2026-03-20",
+		"gpt-5.4-mini":            "gpt-5.4-mini",
+		"gpt-5.4-mini-2026-03-20": "gpt-5.4-mini-2026-03-20",
+		"gpt-5.4-nano":            "gpt-5.4-nano",
+		"gpt-5.4-nano-2026-03-20": "gpt-5.4-nano-2026-03-20",
+		// GPT-5.3 series
+		"gpt-5.3":                 "gpt-5.3",
+		"gpt-5.3-2026-01-15":      "gpt-5.3-2026-01-15",
+		"gpt-5.3-chat":            "gpt-5.3-chat",
+		"gpt-5.3-chat-2026-01-15": "gpt-5.3-chat-2026-01-15",
+		"gpt-5.3-mini":            "gpt-5.3-mini",
+		"gpt-5.3-mini-2026-01-15": "gpt-5.3-mini-2026-01-15",
+		"gpt-5.3-nano":            "gpt-5.3-nano",
+		"gpt-5.3-nano-2026-01-15": "gpt-5.3-nano-2026-01-15",
+		// GPT-5.2 series
 		"gpt-5.2":                 "gpt-5.2",
 		"gpt-5.2-2025-12-11":      "gpt-5.2-2025-12-11",
 		"gpt-5.2-chat":            "gpt-5.2-chat",
 		"gpt-5.2-chat-2025-12-11": "gpt-5.2-chat-2025-12-11",
-		// GPT-5.1 series (NEW)
+		// GPT-5.1 series
 		"gpt-5.1":                       "gpt-5.1",
 		"gpt-5.1-2025-11-13":            "gpt-5.1-2025-11-13",
 		"gpt-5.1-chat":                  "gpt-5.1-chat",
@@ -131,7 +159,7 @@ func init() {
 		// gpt-oss (open-weight reasoning models)
 		"gpt-oss-120b": "gpt-oss-120b",
 		"gpt-oss-20b":  "gpt-oss-20b",
-		// Claude models (Azure Foundry) - Claude 4.x series available via global standard deployment
+		// Claude models (Microsoft Foundry)
 		"claude-opus-4.5":   "claude-opus-4.5",
 		"claude-opus-4-5":   "claude-opus-4.5",
 		"claude-sonnet-4.5": "claude-sonnet-4.5",
@@ -183,7 +211,7 @@ func init() {
 		"babbage-002-1": "babbage-002-1",
 		"davinci-002":   "davinci-002-1",
 		"davinci-002-1": "davinci-002-1",
-		// Audio models - GPT-4o audio
+		// Audio models
 		"gpt-4o-audio-preview":                    "gpt-4o-audio-preview",
 		"gpt-4o-audio-preview-2024-12-17":         "gpt-4o-audio-preview-2024-12-17",
 		"gpt-4o-mini-audio-preview":               "gpt-4o-mini-audio-preview",
@@ -228,7 +256,7 @@ func init() {
 		"sora-2025-05-02":   "sora-2025-05-02",
 		"sora-2":            "sora-2",
 		"sora-2-2025-10-06": "sora-2-2025-10-06",
-		// Phi models (Azure Foundry)
+		// Phi models (Microsoft Foundry)
 		"phi-3":        "phi-3",
 		"phi-3-mini":   "phi-3-mini",
 		"phi-3-small":  "phi-3-small",
@@ -236,11 +264,12 @@ func init() {
 		"phi-4":        "phi-4",
 	}
 
-	log.Printf("Loaded ServerlessDeploymentInfo: %+v", ServerlessDeploymentInfo)
-	log.Printf("Azure OpenAI Endpoint: %s", AzureOpenAIEndpoint)
-	log.Printf("Azure OpenAI API Version: %s", AzureOpenAIAPIVersion)
-	log.Printf("Azure OpenAI Models API Version: %s", AzureOpenAIModelsAPIVersion)
-	log.Printf("Azure OpenAI Responses API Version: %s", AzureOpenAIResponsesAPIVersion)
+	// Merge defaults with any custom mappings (custom overrides defaults)
+	for model, deployment := range defaultModels {
+		if _, exists := FoundryModelMapper[model]; !exists {
+			FoundryModelMapper[model] = deployment
+		}
+	}
 }
 
 // stripModelVersion removes date/version suffixes from model names
@@ -255,28 +284,28 @@ func stripModelVersion(model string) string {
 	return stripped
 }
 
-// resolveModelDeployment resolves a model name to its deployment name
+// resolveModelDeployment resolves an OpenAI model name to a Foundry deployment name
 // It handles versioned model names automatically and falls back to the model mapper
 func resolveModelDeployment(model string) string {
 	modelLower := strings.ToLower(model)
 
-	// First, try exact match in the mapper
-	if azureModel, ok := AzureOpenAIModelMapper[modelLower]; ok {
-		log.Printf("Model %s found in mapper as %s", model, azureModel)
-		return azureModel
+	// First, try exact match in the Foundry mapper
+	if foundryModel, ok := FoundryModelMapper[modelLower]; ok {
+		log.Printf("Model %s found in Foundry mapper as %s", model, foundryModel)
+		return foundryModel
 	}
 
 	// Try stripping version suffix and matching again
 	strippedModel := stripModelVersion(modelLower)
 	if strippedModel != modelLower {
-		if azureModel, ok := AzureOpenAIModelMapper[strippedModel]; ok {
-			log.Printf("Model %s matched stripped version %s in mapper as %s", model, strippedModel, azureModel)
-			return azureModel
+		if foundryModel, ok := FoundryModelMapper[strippedModel]; ok {
+			log.Printf("Model %s matched stripped version %s in Foundry mapper as %s", model, strippedModel, foundryModel)
+			return foundryModel
 		}
 	}
 
 	// If not found, use the original model name (works for custom deployments)
-	log.Printf("Model %s not found in mapper, using as-is for deployment", model)
+	log.Printf("Model %s not found in Foundry mapper, using as-is for deployment", model)
 	return model
 }
 
@@ -289,29 +318,23 @@ func NewOpenAIReverseProxy() *httputil.ReverseProxy {
 
 func HandleToken(req *http.Request) {
 	model := getModelFromRequest(req)
-	modelLower := strings.ToLower(model)
-	// Check if it's a serverless deployment
-	if info, ok := ServerlessDeploymentInfo[modelLower]; ok {
-		// Set the correct authorization header for serverless
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", info.Key))
-		req.Header.Del("api-key")
-		log.Printf("Using serverless deployment authentication for %s", model)
+	
+	// For Microsoft Foundry, we use Bearer token authentication
+	apiKey := req.Header.Get("api-key")
+	if apiKey == "" {
+		apiKey = req.Header.Get("Authorization")
+		if strings.HasPrefix(apiKey, "Bearer ") {
+			apiKey = strings.TrimPrefix(apiKey, "Bearer ")
+		}
+	}
+
+	if apiKey == "" {
+		log.Printf("Warning: No api-key or Authorization header found for model: %s", model)
 	} else {
-		// For regular Azure OpenAI deployments, use the api-key
-		apiKey := req.Header.Get("api-key")
-		if apiKey == "" {
-			apiKey = req.Header.Get("Authorization")
-			if strings.HasPrefix(apiKey, "Bearer ") {
-				apiKey = strings.TrimPrefix(apiKey, "Bearer ")
-			}
-		}
-		if apiKey == "" {
-			log.Printf("Warning: No api-key or Authorization header found for deployment: %s", model)
-		} else {
-			req.Header.Set("api-key", apiKey)
-			req.Header.Del("Authorization")
-			log.Printf("Using regular Azure OpenAI authentication for %s", model)
-		}
+		// Foundry uses Bearer token authentication
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+		req.Header.Del("api-key")
+		log.Printf("Using Bearer token authentication for model: %s", model)
 	}
 }
 
@@ -341,132 +364,92 @@ func makeDirector() func(*http.Request) {
 		// Handle the token
 		HandleToken(req)
 
-		// Convert model to lowercase for case-insensitive matching
-		modelLower := strings.ToLower(model)
+		// Resolve the model to deployment name
+		deployment := resolveModelDeployment(model)
+		log.Printf("Using deployment name: %s for model: %s", deployment, model)
 
-		// Check if it's a serverless deployment
-		if info, ok := ServerlessDeploymentInfo[modelLower]; ok {
-			log.Printf("Model %s matched serverless deployment: %s in region %s", model, info.Name, info.Region)
-			handleServerlessRequest(req, info, model)
-		} else {
-			// Resolve the model deployment (handles versioned names automatically)
-			deployment := resolveModelDeployment(model)
-			log.Printf("Using deployment name: %s for model: %s", deployment, model)
-			handleRegularRequest(req, deployment)
-		}
+		// Route all requests through Foundry (Microsoft Foundry is now primary)
+		handleFoundryRequest(req, deployment, model)
 
 		log.Printf("Final proxied URL: %s", req.URL.String())
 		log.Printf("=================================")
 	}
 }
 
-func handleServerlessRequest(req *http.Request, info ServerlessDeployment, model string) {
+// handleFoundryRequest routes requests to Microsoft Foundry (Azure AI Foundry) serverless endpoints
+// Format: https://{deployment}.{region}.models.ai.azure.com/{endpoint}
+func handleFoundryRequest(req *http.Request, deployment string, model string) {
+	// Use region from environment or default
+	region := FoundryRegion
+	log.Printf("Routing to Microsoft Foundry: deployment=%s, region=%s, model=%s", deployment, region, model)
+
 	req.URL.Scheme = "https"
-	req.URL.Host = fmt.Sprintf("%s.%s.models.ai.azure.com", info.Name, info.Region)
-	req.Host = req.URL.Host // Preserve query parameters from the original request
-	originalQuery := req.URL.Query()
-	for key, values := range originalQuery {
-		for _, value := range values {
-			req.URL.Query().Add(key, value)
+	req.URL.Host = fmt.Sprintf("%s.%s.models.ai.azure.com", deployment, region)
+	req.Host = req.URL.Host
+
+	// Handle different API endpoint types
+	var endpointPath string
+	switch {
+	case strings.HasPrefix(req.URL.Path, "/v1/chat/completions"):
+		endpointPath = "/chat/completions"
+	case strings.HasPrefix(req.URL.Path, "/v1/completions"):
+		endpointPath = "/completions"
+	case strings.HasPrefix(req.URL.Path, "/v1/embeddings"):
+		endpointPath = "/embeddings"
+	case strings.HasPrefix(req.URL.Path, "/v1/images/generations"):
+		endpointPath = "/images/generations"
+	case strings.HasPrefix(req.URL.Path, "/v1/audio/"):
+		audioPath := strings.TrimPrefix(req.URL.Path, "/v1/")
+		endpointPath = "/" + audioPath
+	case strings.HasPrefix(req.URL.Path, "/v1/responses"):
+		endpointPath = "/responses"
+		if strings.Contains(req.URL.Path, "/responses/") {
+			parts := strings.Split(req.URL.Path, "/")
+			if len(parts) > 3 {
+				endpointPath = "/" + strings.Join(parts[3:], "/")
+			}
+		}
+	case strings.HasPrefix(req.URL.Path, "/v1/anthropic/messages"):
+		endpointPath = "/anthropic/messages"
+	case strings.HasPrefix(req.URL.Path, "/v1/files"):
+		endpointPath = "/files"
+	default:
+		endpointPath = strings.TrimPrefix(req.URL.Path, "/v1")
+		if endpointPath == "" {
+			endpointPath = "/"
 		}
 	}
 
-	// Set the correct authorization header for serverless
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", info.Key))
-	req.Header.Del("api-key")
-	log.Printf("Using serverless deployment for %s", model)
-}
+	req.URL.Path = endpointPath
+	log.Printf("Foundry endpoint path: %s", req.URL.Path)
 
-func handleRegularRequest(req *http.Request, deployment string) {
-	remote, _ := url.Parse(AzureOpenAIEndpoint)
-	req.URL.Scheme = remote.Scheme
-	req.URL.Host = remote.Host
-	req.Host = remote.Host
+	// Add api-version query parameter
+	query := req.URL.Query()
+	query.Set("api-version", FoundryAPIVersion)
+	req.URL.RawQuery = query.Encode()
+	log.Printf("Foundry API version: %s", FoundryAPIVersion)
 
-	log.Printf("Setting up regular Azure OpenAI request for deployment: %s", deployment)
-	log.Printf("Azure endpoint: %s", AzureOpenAIEndpoint)
-
-	// Handle Responses API endpoints
-	if strings.Contains(req.URL.Path, "/v1/responses") {
-		// For Responses API, we need to handle the paths differently
-		if strings.HasPrefix(req.URL.Path, "/v1/responses") && !strings.Contains(req.URL.Path, "/responses/") {
-			// POST /v1/responses - Create response
-			req.URL.Path = "/openai/v1/responses"
-			log.Printf("Responses API: Using path /openai/v1/responses")
-		} else {
-			// Other responses endpoints (GET, DELETE, etc.)
-			// Convert /v1/responses/{id} to /openai/v1/responses/{id}
-			req.URL.Path = strings.Replace(req.URL.Path, "/v1/", "/openai/v1/", 1)
-			log.Printf("Responses API: Converted path to %s", req.URL.Path)
-		}
-
-		// Use the preview API version for Responses API
-		query := req.URL.Query()
-		query.Set("api-version", AzureOpenAIResponsesAPIVersion)
-		req.URL.RawQuery = query.Encode()
-		log.Printf("Responses API: Using API version %s", AzureOpenAIResponsesAPIVersion)
-	} else {
-		// Existing logic for other endpoints
-		var endpointType string
-		switch {
-		case strings.HasPrefix(req.URL.Path, "/v1/anthropic/messages"):
-			// Claude models use Anthropic Messages API
-			req.URL.Path = "/anthropic/v1/messages"
-			endpointType = "anthropic/messages"
-			log.Printf("Claude model detected - using Anthropic Messages API endpoint: %s", req.URL.Path)
-		case strings.HasPrefix(req.URL.Path, "/v1/chat/completions"):
-			req.URL.Path = path.Join("/openai/deployments", deployment, "chat/completions")
-			endpointType = "chat/completions"
-		case strings.HasPrefix(req.URL.Path, "/v1/completions"):
-			req.URL.Path = path.Join("/openai/deployments", deployment, "completions")
-			endpointType = "completions"
-		case strings.HasPrefix(req.URL.Path, "/v1/embeddings"):
-			req.URL.Path = path.Join("/openai/deployments", deployment, "embeddings")
-			endpointType = "embeddings"
-		case strings.HasPrefix(req.URL.Path, "/v1/images/generations"):
-			req.URL.Path = path.Join("/openai/deployments", deployment, "images/generations")
-			endpointType = "images/generations"
-		case strings.HasPrefix(req.URL.Path, "/v1/audio/"):
-			// Handle audio endpoints
-			audioPath := strings.TrimPrefix(req.URL.Path, "/v1/")
-			req.URL.Path = path.Join("/openai/deployments", deployment, audioPath)
-			endpointType = "audio"
-		case strings.HasPrefix(req.URL.Path, "/v1/files"):
-			// Files API doesn't use deployment in path
-			req.URL.Path = strings.Replace(req.URL.Path, "/v1/", "/openai/", 1)
-			endpointType = "files"
-		default:
-			req.URL.Path = path.Join("/openai/deployments", deployment, strings.TrimPrefix(req.URL.Path, "/v1/"))
-			endpointType = "other"
-		}
-		log.Printf("Endpoint type: %s, Path set to: %s", endpointType, req.URL.Path)
-
-		// Add api-version query parameter for non-Responses API (but not for Anthropic API)
-		if endpointType != "anthropic/messages" {
-			query := req.URL.Query()
-			query.Add("api-version", AzureOpenAIAPIVersion)
-			req.URL.RawQuery = query.Encode()
-			log.Printf("Using API version: %s", AzureOpenAIAPIVersion)
-		} else {
-			// For Anthropic Messages API, set the anthropic-version header
-			req.Header.Set("anthropic-version", AnthropicAPIVersion)
-			log.Printf("Anthropic Messages API: Set anthropic-version header to %s, skipping Azure api-version query parameter", AnthropicAPIVersion)
-		}
-	}
-
-	// Use the api-key from the original request for regular deployments
+	// Use Bearer token authentication
 	apiKey := req.Header.Get("api-key")
 	if apiKey == "" {
-		log.Printf("Warning: No api-key found in request headers for deployment: %s", deployment)
-	} else {
-		// For Anthropic Messages API, convert to Authorization Bearer header
-		if strings.Contains(req.URL.Path, "/anthropic/v1/messages") {
-			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
-			req.Header.Del("api-key")
-			log.Printf("Anthropic API: Using Authorization Bearer header for deployment: %s", deployment)
-		} else {
-			log.Printf("API key found for deployment: %s", deployment)
+		apiKey = req.Header.Get("Authorization")
+		if strings.HasPrefix(apiKey, "Bearer ") {
+			apiKey = strings.TrimPrefix(apiKey, "Bearer ")
 		}
+	}
+
+	if apiKey == "" {
+		log.Printf("Warning: No API key found for Foundry deployment: %s", deployment)
+	} else {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+		req.Header.Del("api-key")
+		log.Printf("Using Bearer token authentication for Foundry deployment: %s", deployment)
+	}
+
+	// Set Anthropic version header if needed
+	if strings.Contains(endpointPath, "/anthropic/") {
+		req.Header.Set("anthropic-version", AnthropicAPIVersion)
+		log.Printf("Anthropic endpoint detected - set anthropic-version: %s", AnthropicAPIVersion)
 	}
 }
 

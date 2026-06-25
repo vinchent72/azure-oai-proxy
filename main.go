@@ -66,12 +66,12 @@ func init() {
 	log.Printf("loading azure openai proxy address: %s", Address)
 	log.Printf("loading azure openai proxy mode: %s", ProxyMode)
 
-	// Load Azure OpenAI Model Mapper
+	// Load Foundry Model Mapper overrides from environment
 	if v := os.Getenv("AZURE_OPENAI_MODEL_MAPPER"); v != "" {
 		for _, pair := range strings.Split(v, ",") {
 			info := strings.Split(pair, "=")
 			if len(info) == 2 {
-				azure.AzureOpenAIModelMapper[info[0]] = info[1]
+				azure.FoundryModelMapper[info[0]] = info[1]
 			}
 		}
 	}
