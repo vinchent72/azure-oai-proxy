@@ -8,7 +8,6 @@ services:
     restart: always
     environment:
       - AZURE_FOUNDRY_REGION=westus
-      - AZURE_OPENAI_APIVERSION=2024-08-01-preview
       - ANTHROPIC_APIVERSION=2023-06-01
     # Optional: Add custom model mappings
     # - AZURE_OPENAI_MODEL_MAPPER=custom-model-1=foundry-deployment-1,custom-model-2=foundry-deployment-2

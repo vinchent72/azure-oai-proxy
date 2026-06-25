@@ -115,7 +115,6 @@ The proxy supports **200+ model variants** across all Microsoft Foundry categori
 | Parameter                       | Description                                                    | Default Value    | Required |
 | :------------------------------ | :------------------------------------------------------------- | :--------------- | :------- |
 | AZURE_FOUNDRY_REGION            | Azure Foundry region (e.g., westus, eastus, northcentralus)   | westus           | No       |
-| AZURE_OPENAI_APIVERSION         | Foundry API version                                            | 2024-08-01-preview | No       |
 | ANTHROPIC_APIVERSION            | Anthropic API version (for Claude models)                      | 2023-06-01       | No       |
 | AZURE_OPENAI_PROXY_ADDRESS      | Proxy server listening address                                 | 0.0.0.0:11437    | No       |
 | AZURE_OPENAI_MODEL_MAPPER       | Comma-separated list of model=deployment pairs (optional overrides) |                  | No       |
@@ -125,7 +124,7 @@ The proxy supports **200+ model variants** across all Microsoft Foundry categori
 1. **Region**: Set `AZURE_FOUNDRY_REGION` to your Foundry region. Default is `westus`.
 2. **Models**: The proxy includes 200+ built-in model mappings. Use `AZURE_OPENAI_MODEL_MAPPER` to override for custom deployments.
 3. **Authentication**: Pass your Foundry API key as Bearer token or `api-key` header. The proxy converts it automatically.
-4. **API Version**: Unified `AZURE_OPENAI_APIVERSION` is used for all Foundry endpoints. `ANTHROPIC_APIVERSION` is used only for Claude models.
+4. **API Version**: `ANTHROPIC_APIVERSION` is used only for Claude models.
 
 ### Example Custom Model Mappings
 
@@ -155,7 +154,6 @@ AZURE_FOUNDRY_REGION=eastus docker compose up -d
 
 ```
 AZURE_FOUNDRY_REGION=westus
-AZURE_OPENAI_APIVERSION=2024-08-01-preview
 ANTHROPIC_APIVERSION=2023-06-01
 ```
 
@@ -169,7 +167,6 @@ docker compose up -d
 ```sh
 docker run -d -p 11437:11437 \
   -e AZURE_FOUNDRY_REGION=westus \
-  -e AZURE_OPENAI_APIVERSION=2024-08-01-preview \
   ghcr.io/gyarbij/azure-oai-proxy:latest
 ```
 

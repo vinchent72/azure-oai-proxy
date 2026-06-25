@@ -19,7 +19,6 @@ import (
 
 var (
 	// Foundry API Configuration
-	FoundryAPIVersion    = "2024-08-01-preview" // Single API version for all Foundry endpoints (chat, responses, etc.)
 	FoundryRegion        = "westus"             // Default region for Foundry deployments (used for serverless endpoints)
 	FoundryEndpoint      = ""                   // Workspace-level endpoint (if set, overrides serverless per-deployment routing)
 	AnthropicAPIVersion  = "2023-06-01"         // Anthropic API version for Claude models
@@ -27,11 +26,6 @@ var (
 )
 
 func init() {
-	// Load API version from environment
-	if v := os.Getenv("AZURE_OPENAI_APIVERSION"); v != "" {
-		FoundryAPIVersion = v
-	}
-	
 	// Load region from environment (defaults to westus)
 	if v := os.Getenv("AZURE_FOUNDRY_REGION"); v != "" {
 		FoundryRegion = v
@@ -70,7 +64,6 @@ func init() {
 		log.Printf("Routing: Microsoft Foundry (serverless per-deployment)")
 		log.Printf("Region: %s", FoundryRegion)
 	}
-	log.Printf("API Version: %s", FoundryAPIVersion)
 	log.Printf("Anthropic API Version: %s", AnthropicAPIVersion)
 	log.Printf("Total models in mapper: %d", len(FoundryModelMapper))
 	log.Printf("=============================================")
@@ -477,12 +470,6 @@ func handleFoundryRequest(req *http.Request, deployment string, model string) {
 		req.URL.Path = endpointPath
 		log.Printf("Foundry serverless endpoint path: %s", req.URL.Path)
 	}
-
-	// Add api-version query parameter (for both workspace and serverless)
-	query := req.URL.Query()
-	query.Set("api-version", FoundryAPIVersion)
-	req.URL.RawQuery = query.Encode()
-	log.Printf("API version: %s", FoundryAPIVersion)
 
 	// Use Bearer token authentication
 	apiKey := req.Header.Get("api-key")
