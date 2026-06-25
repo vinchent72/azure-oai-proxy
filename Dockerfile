@@ -1,7 +1,8 @@
 FROM golang:1.25.5 AS builder
 WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
 COPY . .
-RUN go get github.com/joho/godotenv
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o azure-oai-proxy .
 
 FROM gcr.io/distroless/base-debian12
