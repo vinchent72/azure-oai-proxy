@@ -133,25 +133,18 @@ func main() {
 }
 
 func handleGetModels(c *gin.Context) {
-	req, _ := http.NewRequest("GET", c.Request.URL.String(), nil)
-	req.Header.Set("Authorization", c.GetHeader("Authorization"))
-
-	models, err := fetchDeployedModels(req)
-	if err != nil {
-		log.Printf("error fetching deployed models: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch deployed models"})
-		return
-	}
-
-	// Add serverless deployments to the models list
-	for deploymentName := range azure.ServerlessDeploymentInfo {
+	// Return all supported models from the Foundry model mapper
+	models := make([]Model, 0, len(azure.FoundryModelMapper))
+	
+	for modelName := range azure.FoundryModelMapper {
 		models = append(models, Model{
-			ID:     deploymentName,
+			ID:     modelName,
 			Object: "model",
 			Capabilities: Capabilities{
 				Completion:     true,
 				ChatCompletion: true,
 				Inference:      true,
+				Embeddings:     true,
 			},
 			LifecycleStatus: "active",
 			Status:          "ready",
@@ -163,45 +156,6 @@ func handleGetModels(c *gin.Context) {
 		Data:   models,
 	}
 	c.JSON(http.StatusOK, result)
-}
-
-func fetchDeployedModels(originalReq *http.Request) ([]Model, error) {
-	endpoint := os.Getenv("AZURE_OPENAI_ENDPOINT")
-	if endpoint == "" {
-		endpoint = azure.AzureOpenAIEndpoint
-	}
-
-	// Use the separate models API version
-	modelsAPIVersion := azure.AzureOpenAIModelsAPIVersion
-	url := fmt.Sprintf("%s/openai/models?api-version=%s", endpoint, modelsAPIVersion)
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Authorization", originalReq.Header.Get("Authorization"))
-
-	azure.HandleToken(req)
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to fetch deployed models: %s", string(body))
-	}
-
-	var deployedModelsResponse ModelList
-	if err := json.NewDecoder(resp.Body).Decode(&deployedModelsResponse); err != nil {
-		return nil, err
-	}
-
-	return deployedModelsResponse.Data, nil
 }
 
 func handleOptions(c *gin.Context) {
