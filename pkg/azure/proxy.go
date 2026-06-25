@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -19,7 +20,8 @@ import (
 var (
 	// Foundry API Configuration
 	FoundryAPIVersion    = "2024-08-01-preview" // Single API version for all Foundry endpoints (chat, responses, etc.)
-	FoundryRegion        = "westus"             // Default region for Foundry deployments
+	FoundryRegion        = "westus"             // Default region for Foundry deployments (used for serverless endpoints)
+	FoundryEndpoint      = ""                   // Workspace-level endpoint (if set, overrides serverless per-deployment routing)
 	AnthropicAPIVersion  = "2023-06-01"         // Anthropic API version for Claude models
 	FoundryModelMapper   = make(map[string]string) // Maps OpenAI model names to Foundry deployment names
 )
@@ -30,9 +32,14 @@ func init() {
 		FoundryAPIVersion = v
 	}
 	
-	// Load region from environment (defaults to eastus)
+	// Load region from environment (defaults to westus)
 	if v := os.Getenv("AZURE_FOUNDRY_REGION"); v != "" {
 		FoundryRegion = v
+	}
+	
+	// Load workspace-level endpoint if specified (e.g., https://workspace.openai.azure.com/openai/v1)
+	if v := os.Getenv("AZURE_FOUNDRY_ENDPOINT"); v != "" {
+		FoundryEndpoint = v
 	}
 	
 	// Load Anthropic API version if specified
@@ -56,8 +63,13 @@ func init() {
 	initializeModelMapper()
 
 	log.Printf("========== FOUNDRY PROXY INITIALIZED ==========")
-	log.Printf("Routing: Microsoft Foundry (serverless)")
-	log.Printf("Region: %s", FoundryRegion)
+	if FoundryEndpoint != "" {
+		log.Printf("Routing: Microsoft Foundry (workspace-level)")
+		log.Printf("Endpoint: %s", FoundryEndpoint)
+	} else {
+		log.Printf("Routing: Microsoft Foundry (serverless per-deployment)")
+		log.Printf("Region: %s", FoundryRegion)
+	}
 	log.Printf("API Version: %s", FoundryAPIVersion)
 	log.Printf("Anthropic API Version: %s", AnthropicAPIVersion)
 	log.Printf("Total models in mapper: %d", len(FoundryModelMapper))
@@ -374,58 +386,103 @@ func makeDirector() func(*http.Request) {
 	}
 }
 
-// handleFoundryRequest routes requests to Microsoft Foundry (Azure AI Foundry) serverless endpoints
-// Format: https://{deployment}.{region}.models.ai.azure.com/{endpoint}
+// handleFoundryRequest routes requests to Microsoft Foundry
+// Supports both workspace-level endpoints and serverless per-deployment endpoints
 func handleFoundryRequest(req *http.Request, deployment string, model string) {
-	// Use region from environment or default
-	region := FoundryRegion
-	log.Printf("Routing to Microsoft Foundry: deployment=%s, region=%s, model=%s", deployment, region, model)
-
-	req.URL.Scheme = "https"
-	req.URL.Host = fmt.Sprintf("%s.%s.models.ai.azure.com", deployment, region)
-	req.Host = req.URL.Host
-
-	// Handle different API endpoint types
-	var endpointPath string
-	switch {
-	case strings.HasPrefix(req.URL.Path, "/v1/chat/completions"):
-		endpointPath = "/chat/completions"
-	case strings.HasPrefix(req.URL.Path, "/v1/completions"):
-		endpointPath = "/completions"
-	case strings.HasPrefix(req.URL.Path, "/v1/embeddings"):
-		endpointPath = "/embeddings"
-	case strings.HasPrefix(req.URL.Path, "/v1/images/generations"):
-		endpointPath = "/images/generations"
-	case strings.HasPrefix(req.URL.Path, "/v1/audio/"):
-		audioPath := strings.TrimPrefix(req.URL.Path, "/v1/")
-		endpointPath = "/" + audioPath
-	case strings.HasPrefix(req.URL.Path, "/v1/responses"):
-		endpointPath = "/responses"
-		if strings.Contains(req.URL.Path, "/responses/") {
-			parts := strings.Split(req.URL.Path, "/")
-			if len(parts) > 3 {
-				endpointPath = "/" + strings.Join(parts[3:], "/")
+	// Check if using workspace-level endpoint or serverless
+	if FoundryEndpoint != "" {
+		// Workspace-level routing
+		log.Printf("Routing to Foundry workspace endpoint: %s, model=%s", FoundryEndpoint, model)
+		
+		// Parse the workspace endpoint
+		baseURL := FoundryEndpoint
+		
+		// Convert /v1/* paths to the workspace endpoint format
+		var endpointPath string
+		switch {
+		case strings.HasPrefix(req.URL.Path, "/v1/chat/completions"):
+			endpointPath = "/chat/completions"
+		case strings.HasPrefix(req.URL.Path, "/v1/completions"):
+			endpointPath = "/completions"
+		case strings.HasPrefix(req.URL.Path, "/v1/embeddings"):
+			endpointPath = "/embeddings"
+		case strings.HasPrefix(req.URL.Path, "/v1/images/generations"):
+			endpointPath = "/images/generations"
+		case strings.HasPrefix(req.URL.Path, "/v1/audio/"):
+			audioPath := strings.TrimPrefix(req.URL.Path, "/v1/")
+			endpointPath = "/" + audioPath
+		case strings.HasPrefix(req.URL.Path, "/v1/responses"):
+			endpointPath = "/responses"
+			if strings.Contains(req.URL.Path, "/responses/") {
+				parts := strings.Split(req.URL.Path, "/")
+				if len(parts) > 3 {
+					endpointPath = "/" + strings.Join(parts[3:], "/")
+				}
+			}
+		default:
+			endpointPath = strings.TrimPrefix(req.URL.Path, "/v1")
+			if endpointPath == "" {
+				endpointPath = "/"
 			}
 		}
-	case strings.HasPrefix(req.URL.Path, "/v1/anthropic/messages"):
-		endpointPath = "/anthropic/messages"
-	case strings.HasPrefix(req.URL.Path, "/v1/files"):
-		endpointPath = "/files"
-	default:
-		endpointPath = strings.TrimPrefix(req.URL.Path, "/v1")
-		if endpointPath == "" {
-			endpointPath = "/"
+		
+		// Build full URL: https://workspace.openai.azure.com/openai/v1/chat/completions
+		fullURL := baseURL + endpointPath
+		req.URL, _ = url.Parse(fullURL)
+		req.Host = req.URL.Host
+		
+		log.Printf("Workspace endpoint URL: %s", req.URL.String())
+	} else {
+		// Serverless per-deployment routing
+		region := FoundryRegion
+		log.Printf("Routing to Foundry serverless: deployment=%s, region=%s, model=%s", deployment, region, model)
+
+		req.URL.Scheme = "https"
+		req.URL.Host = fmt.Sprintf("%s.%s.models.ai.azure.com", deployment, region)
+		req.Host = req.URL.Host
+
+		// Handle different API endpoint types
+		var endpointPath string
+		switch {
+		case strings.HasPrefix(req.URL.Path, "/v1/chat/completions"):
+			endpointPath = "/chat/completions"
+		case strings.HasPrefix(req.URL.Path, "/v1/completions"):
+			endpointPath = "/completions"
+		case strings.HasPrefix(req.URL.Path, "/v1/embeddings"):
+			endpointPath = "/embeddings"
+		case strings.HasPrefix(req.URL.Path, "/v1/images/generations"):
+			endpointPath = "/images/generations"
+		case strings.HasPrefix(req.URL.Path, "/v1/audio/"):
+			audioPath := strings.TrimPrefix(req.URL.Path, "/v1/")
+			endpointPath = "/" + audioPath
+		case strings.HasPrefix(req.URL.Path, "/v1/responses"):
+			endpointPath = "/responses"
+			if strings.Contains(req.URL.Path, "/responses/") {
+				parts := strings.Split(req.URL.Path, "/")
+				if len(parts) > 3 {
+					endpointPath = "/" + strings.Join(parts[3:], "/")
+				}
+			}
+		case strings.HasPrefix(req.URL.Path, "/v1/anthropic/messages"):
+			endpointPath = "/anthropic/messages"
+		case strings.HasPrefix(req.URL.Path, "/v1/files"):
+			endpointPath = "/files"
+		default:
+			endpointPath = strings.TrimPrefix(req.URL.Path, "/v1")
+			if endpointPath == "" {
+				endpointPath = "/"
+			}
 		}
+
+		req.URL.Path = endpointPath
+		log.Printf("Foundry serverless endpoint path: %s", req.URL.Path)
 	}
 
-	req.URL.Path = endpointPath
-	log.Printf("Foundry endpoint path: %s", req.URL.Path)
-
-	// Add api-version query parameter
+	// Add api-version query parameter (for both workspace and serverless)
 	query := req.URL.Query()
 	query.Set("api-version", FoundryAPIVersion)
 	req.URL.RawQuery = query.Encode()
-	log.Printf("Foundry API version: %s", FoundryAPIVersion)
+	log.Printf("API version: %s", FoundryAPIVersion)
 
 	// Use Bearer token authentication
 	apiKey := req.Header.Get("api-key")
@@ -437,15 +494,15 @@ func handleFoundryRequest(req *http.Request, deployment string, model string) {
 	}
 
 	if apiKey == "" {
-		log.Printf("Warning: No API key found for Foundry deployment: %s", deployment)
+		log.Printf("Warning: No API key found for model: %s", model)
 	} else {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
 		req.Header.Del("api-key")
-		log.Printf("Using Bearer token authentication for Foundry deployment: %s", deployment)
+		log.Printf("Using Bearer token authentication for model: %s", model)
 	}
 
 	// Set Anthropic version header if needed
-	if strings.Contains(endpointPath, "/anthropic/") {
+	if strings.Contains(req.URL.Path, "/anthropic/") {
 		req.Header.Set("anthropic-version", AnthropicAPIVersion)
 		log.Printf("Anthropic endpoint detected - set anthropic-version: %s", AnthropicAPIVersion)
 	}
