@@ -19,6 +19,8 @@ import (
 
 var (
 	// Foundry API Configuration
+	FoundryAPIKey        = ""                  // API key for Foundry authentication (stored server-side)
+	AllowedAuthTokens    = make(map[string]bool) // Allowed client auth tokens for access control
 	FoundryRegion        = "westus"             // Default region for Foundry deployments (used for serverless endpoints)
 	FoundryEndpoint      = ""                   // Workspace-level endpoint (if set, overrides serverless per-deployment routing)
 	AnthropicAPIVersion  = "2023-06-01"         // Anthropic API version for Claude models
@@ -26,6 +28,26 @@ var (
 )
 
 func init() {
+	// Load Foundry API key from environment (server-side)
+	if v := os.Getenv("FOUNDRY_API_KEY"); v != "" {
+		FoundryAPIKey = v
+	}
+	
+	// Load allowed auth tokens from environment (comma-separated)
+	if v := os.Getenv("AUTH_TOKENS"); v != "" {
+		for _, token := range strings.Split(v, ",") {
+			token = strings.TrimSpace(token)
+			if token != "" {
+				AllowedAuthTokens[token] = true
+				tokenPreview := token
+				if len(token) > 8 {
+					tokenPreview = token[:8]
+				}
+				log.Printf("Allowed auth token registered: %s...", tokenPreview)
+			}
+		}
+	}
+	
 	// Load region from environment (defaults to westus)
 	if v := os.Getenv("AZURE_FOUNDRY_REGION"); v != "" {
 		FoundryRegion = v
@@ -57,6 +79,12 @@ func init() {
 	initializeModelMapper()
 
 	log.Printf("========== FOUNDRY PROXY INITIALIZED ==========")
+	if FoundryAPIKey != "" {
+		log.Printf("Foundry API Key: **** (stored in environment)")
+	} else {
+		log.Printf("Warning: FOUNDRY_API_KEY not set")
+	}
+	log.Printf("Allowed auth tokens: %d", len(AllowedAuthTokens))
 	if FoundryEndpoint != "" {
 		log.Printf("Routing: Microsoft Foundry (workspace-level)")
 		log.Printf("Endpoint: %s", FoundryEndpoint)
@@ -322,23 +350,37 @@ func NewOpenAIReverseProxy() *httputil.ReverseProxy {
 func HandleToken(req *http.Request) {
 	model := getModelFromRequest(req)
 	
-	// For Microsoft Foundry, we use Bearer token authentication
-	apiKey := req.Header.Get("api-key")
-	if apiKey == "" {
-		apiKey = req.Header.Get("Authorization")
-		if strings.HasPrefix(apiKey, "Bearer ") {
-			apiKey = strings.TrimPrefix(apiKey, "Bearer ")
-		}
-	}
-
-	if apiKey == "" {
-		log.Printf("Warning: No api-key or Authorization header found for model: %s", model)
+	// Extract auth token from request (can be in "Authorization: Bearer" or "api-key" header)
+	authToken := req.Header.Get("Authorization")
+	if strings.HasPrefix(authToken, "Bearer ") {
+		authToken = strings.TrimPrefix(authToken, "Bearer ")
 	} else {
-		// Foundry uses Bearer token authentication
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
-		req.Header.Del("api-key")
-		log.Printf("Using Bearer token authentication for model: %s", model)
+		authToken = req.Header.Get("api-key")
 	}
+	
+	if authToken == "" {
+		log.Printf("Warning: No auth token found for model: %s", model)
+		return
+	}
+	
+	// Validate auth token against allowed tokens
+	if !AllowedAuthTokens[authToken] {
+		log.Printf("ERROR: Invalid auth token for model: %s - token not in allowed list", model)
+		// Set empty Authorization header so Foundry returns 401
+		req.Header.Del("Authorization")
+		req.Header.Del("api-key")
+		return
+	}
+	
+	// Auth token is valid - use the stored Foundry API key for Foundry authentication
+	if FoundryAPIKey == "" {
+		log.Printf("ERROR: FOUNDRY_API_KEY not set in environment for model: %s", model)
+		return
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", FoundryAPIKey))
+	req.Header.Del("api-key")
+	log.Printf("Valid auth token accepted - using stored Foundry API key for model: %s", model)
 }
 
 func makeDirector() func(*http.Request) {
@@ -472,22 +514,8 @@ func handleFoundryRequest(req *http.Request, deployment string, model string) {
 	}
 
 	// Use Bearer token authentication
-	apiKey := req.Header.Get("api-key")
-	if apiKey == "" {
-		apiKey = req.Header.Get("Authorization")
-		if strings.HasPrefix(apiKey, "Bearer ") {
-			apiKey = strings.TrimPrefix(apiKey, "Bearer ")
-		}
-	}
-
-	if apiKey == "" {
-		log.Printf("Warning: No API key found for model: %s", model)
-	} else {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
-		req.Header.Del("api-key")
-		log.Printf("Using Bearer token authentication for model: %s", model)
-	}
-
+	// Note: HandleToken() is called in makeDirector() before this, so authorization is already set
+	
 	// Set Anthropic version header if needed
 	if strings.Contains(req.URL.Path, "/anthropic/") {
 		req.Header.Set("anthropic-version", AnthropicAPIVersion)

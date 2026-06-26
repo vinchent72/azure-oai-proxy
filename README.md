@@ -114,6 +114,9 @@ The proxy supports **200+ model variants** across all Microsoft Foundry categori
 
 | Parameter                       | Description                                                    | Default Value    | Required |
 | :------------------------------ | :------------------------------------------------------------- | :--------------- | :------- |
+| FOUNDRY_API_KEY                 | Foundry API key (stored server-side, not passed from client)   |                  | Yes      |
+| AUTH_TOKENS                     | Comma-separated list of client auth tokens for access control  |                  | Yes      |
+| AZURE_FOUNDRY_ENDPOINT          | Foundry workspace-level endpoint (if set, overrides serverless)|                  | No       |
 | AZURE_FOUNDRY_REGION            | Azure Foundry region (e.g., westus, eastus, northcentralus)   | westus           | No       |
 | ANTHROPIC_APIVERSION            | Anthropic API version (for Claude models)                      | 2023-06-01       | No       |
 | AZURE_OPENAI_PROXY_ADDRESS      | Proxy server listening address                                 | 0.0.0.0:11437    | No       |
@@ -121,10 +124,15 @@ The proxy supports **200+ model variants** across all Microsoft Foundry categori
 
 ### How It Works
 
-1. **Region**: Set `AZURE_FOUNDRY_REGION` to your Foundry region. Default is `westus`.
-2. **Models**: The proxy includes 200+ built-in model mappings. Use `AZURE_OPENAI_MODEL_MAPPER` to override for custom deployments.
-3. **Authentication**: Pass your Foundry API key as Bearer token or `api-key` header. The proxy converts it automatically.
-4. **API Version**: `ANTHROPIC_APIVERSION` is used only for Claude models.
+1. **Server-side API Key**: Store your Foundry API key in the `FOUNDRY_API_KEY` environment variable on the Docker container. It's never exposed or passed to clients.
+2. **Client Access Tokens**: Define allowed client auth tokens in `AUTH_TOKENS` (comma-separated list, e.g., `sk-dev-token-1,sk-dev-token-2`).
+3. **Client Authentication**: Clients send requests with their auth token in the `Authorization: Bearer sk-dev-...` or `api-key` header.
+4. **Token Validation**: The proxy validates the client's auth token against the allowed list. If invalid, returns 401.
+5. **Foundry Forwarding**: If token is valid, the proxy replaces it with the server-side `FOUNDRY_API_KEY` and forwards to Foundry.
+6. **Model Routing**: The proxy includes 200+ built-in model mappings. Use `AZURE_OPENAI_MODEL_MAPPER` to override for custom deployments.
+7. **Endpoint Modes**:
+   - **Workspace-level** (if `AZURE_FOUNDRY_ENDPOINT` is set): All models route through single endpoint
+   - **Serverless per-deployment** (default): Each model routes to `<deployment>.<region>.models.ai.azure.com`
 
 ### Example Custom Model Mappings
 
@@ -138,34 +146,34 @@ AZURE_OPENAI_MODEL_MAPPER=my-gpt=my-gpt-deployment,my-claude=my-claude-deploymen
 
 ### Quick Start with Docker Compose
 
-1. **Using the provided compose.yaml:**
+1. **Set up environment variables first:**
 
-```sh
-docker compose up -d
-```
-
-2. **Custom region:**
-
-```sh
-AZURE_FOUNDRY_REGION=eastus docker compose up -d
-```
-
-3. **Or create a .env file:**
+Create a `.env` file or update `compose.yaml` with your Foundry API key and auth tokens:
 
 ```
+FOUNDRY_API_KEY=your-actual-foundry-api-key
+AUTH_TOKENS=sk-dev-coding-token-432323,sk-dev-another-token
 AZURE_FOUNDRY_REGION=westus
-ANTHROPIC_APIVERSION=2023-06-01
 ```
 
-Then run:
+2. **Run with Docker Compose:**
+
 ```sh
 docker compose up -d
+```
+
+Or with environment override:
+
+```sh
+FOUNDRY_API_KEY=<your-key> AUTH_TOKENS=sk-dev-token-1,sk-dev-token-2 docker compose up -d
 ```
 
 ### Docker Command
 
 ```sh
 docker run -d -p 11437:11437 \
+  -e FOUNDRY_API_KEY=your-actual-foundry-api-key \
+  -e AUTH_TOKENS=sk-dev-coding-token-432323,sk-dev-another-token \
   -e AZURE_FOUNDRY_REGION=westus \
   ghcr.io/gyarbij/azure-oai-proxy:latest
 ```
@@ -178,12 +186,14 @@ See [compose.yaml](compose.yaml) for a pre-configured example with all supported
 
 All examples use standard OpenAI API format. The proxy automatically routes to the appropriate Foundry endpoint.
 
+**Authentication**: Use your configured auth token (e.g., `sk-dev-coding-token-432323`) in the `Authorization: Bearer` header. The proxy validates it and uses the server-side `FOUNDRY_API_KEY` to call Foundry.
+
 ### GPT Model (Chat Completions)
 
 ```bash
 curl http://localhost:11437/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-foundry-api-key" \
+  -H "Authorization: Bearer sk-dev-coding-token-432323" \
   -d '{
     "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Hello!"}]
@@ -197,7 +207,7 @@ The proxy automatically routes O-series models through the Responses API while m
 ```bash
 curl http://localhost:11437/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-foundry-api-key" \
+  -H "Authorization: Bearer sk-dev-coding-token-432323" \
   -d '{
     "model": "o3-mini",
     "messages": [{"role": "user", "content": "Solve this math problem: 2+2"}],
@@ -212,7 +222,7 @@ The proxy automatically converts from OpenAI format to Anthropic Messages API in
 ```bash
 curl http://localhost:11437/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-foundry-api-key" \
+  -H "Authorization: Bearer sk-dev-coding-token-432323" \
   -d '{
     "model": "claude-sonnet-4.5",
     "messages": [{"role": "user", "content": "Explain quantum computing"}],
@@ -225,7 +235,7 @@ curl http://localhost:11437/v1/chat/completions \
 ```bash
 curl http://localhost:11437/v1/embeddings \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-foundry-api-key" \
+  -H "Authorization: Bearer sk-dev-coding-token-432323" \
   -d '{
     "model": "text-embedding-3-small",
     "input": "Hello, world!"
@@ -237,7 +247,7 @@ curl http://localhost:11437/v1/embeddings \
 ```bash
 curl http://localhost:11437/v1/images/generations \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-foundry-api-key" \
+  -H "Authorization: Bearer sk-dev-coding-token-432323" \
   -d '{
     "model": "dall-e-3",
     "prompt": "A beautiful sunset",
@@ -253,7 +263,7 @@ Add `"stream": true` to enable streaming responses:
 ```bash
 curl http://localhost:11437/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-foundry-api-key" \
+  -H "Authorization: Bearer sk-dev-coding-token-432323" \
   -d '{
     "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Count to 10"}],
@@ -263,10 +273,13 @@ curl http://localhost:11437/v1/chat/completions \
 
 ## Security Recommendations
 
-1. **Always use TLS/SSL** in production. Configure a reverse proxy (nginx, Caddy) with SSL termination in front of the proxy.
-2. **Protect your API key**: Never expose your Foundry API key in client-side code.
-3. **Firewall**: Restrict access to the proxy port to trusted networks only.
-4. **Rate limiting**: Consider adding rate limiting middleware for production deployments.
+1. **Server-side API key storage**: Store `FOUNDRY_API_KEY` as a secret in your container management system (Docker secrets, Kubernetes secrets, Azure Key Vault). Never include it in source code or public configuration.
+2. **Client auth tokens**: Use strong, random auth tokens (e.g., `sk-dev-coding-token-432323`). Treat them like session tokens - rotate periodically.
+3. **Always use TLS/SSL** in production. Configure a reverse proxy (nginx, Caddy) with SSL termination in front of the proxy.
+4. **Protect tokens**: Never expose client auth tokens or Foundry API key in logs or error messages.
+5. **Firewall**: Restrict access to the proxy port to trusted networks only.
+6. **Rate limiting**: Consider adding rate limiting middleware for production deployments.
+7. **Token validation**: The proxy validates all incoming auth tokens against the allowed list. Invalid tokens receive 401 Unauthorized immediately.
 
 ## Troubleshooting
 
