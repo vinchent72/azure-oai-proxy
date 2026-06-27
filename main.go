@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -13,6 +12,7 @@ import (
 	"github.com/vinchent72/azure-oai-proxy/pkg/azure"
 	"github.com/vinchent72/azure-oai-proxy/pkg/openai"
 	"github.com/joho/godotenv"
+	"github.com/tidwall/gjson"
 )
 
 var (
@@ -40,11 +40,6 @@ type Capabilities struct {
 	Embeddings     bool `json:"embeddings"`
 }
 
-// Simple request inspector structure to extract the model name
-type MinimalRequestBody struct {
-	Model string `json:"model"`
-}
-
 func init() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using system environment variables")
@@ -60,12 +55,11 @@ func init() {
 
 	log.Printf("Starting Proxy Service on: %s (Mode: %s)", Address, ProxyMode)
 
-	// Load native mappings cleanly from the environment directly into the package mapper
 	if v := os.Getenv("AZURE_OPENAI_MODEL_MAPPER"); v != "" {
 		for _, pair := range strings.Split(v, ",") {
 			info := strings.Split(pair, "=")
 			if len(info) == 2 {
-				azure.FoundryModelMapper[info[0]] = info[1]
+				azure.FoundryModelMapper[strings.ToLower(strings.TrimSpace(info[0]))] = strings.TrimSpace(info[1])
 				log.Printf("Registered Native Model Route: %s -> %s", info[0], info[1])
 			}
 		}
@@ -90,37 +84,48 @@ func main() {
 				return
 			}
 
-			// DYNAMIC ROUTING FOR /v1/responses
-			if path == "/v1/responses" {
-				// Read the body bytes to look at the model payload
+			// Core Interceptor for /v1/responses targeting Chat-Only backends (e.g., DeepSeek)
+			if path == "/v1/responses" && c.Request.Body != nil {
 				bodyBytes, err := io.ReadAll(c.Request.Body)
 				if err != nil {
 					c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read request body"})
 					return
 				}
-				// Restore the body so downstream handlers can re-read it
-				c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-				var reqBody MinimalRequestBody
-				_ = json.Unmarshal(bodyBytes, &reqBody)
+				modelName := gjson.GetBytes(bodyBytes, "model").String()
+				isStream := gjson.GetBytes(bodyBytes, "stream").Bool()
 
-				// Decide the endpoint based on model type
-				modelName := strings.ToLower(reqBody.Model)
-				
-				if strings.Contains(modelName, "deepseek") {
-					// DeepSeek only supports standard Chat Completions
+				if azure.IsChatOnlyModel(modelName) {
+					log.Printf("[Autodetect] Model %s is chat-only. Translating payload...", modelName)
+					
+					translatedBody, err := azure.TranslateResponsesToChatRequest(bodyBytes)
+					if err != nil {
+						c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to map responses schema to chat completion"})
+						return
+					}
+
+					// Mutate Request properties for underlying package compatibility
 					c.Request.URL.Path = "/v1/chat/completions"
-					log.Printf("[Proxy Routing] Redirected %s to /v1/chat/completions", reqBody.Model)
-				} else {
-					// Default fallback: Leave it as /v1/responses for native Azure / Reasoning models
-					log.Printf("[Proxy Routing] Retained %s on native /v1/responses", reqBody.Model)
+					c.Request.Body = io.NopCloser(bytes.NewBuffer(translatedBody))
+					c.Request.ContentLength = int64(len(translatedBody))
+					c.Request.Header.Set("Content-Length", string(len(translatedBody)))
+
+					// Instantiate our dynamic response transformation wrapper
+					translationWriter := azure.NewResponseTranslationWriter(c.Writer, isStream, modelName)
+					c.Writer = translationWriter
+
+					// Forward execution
+					handleAzureProxy(c)
+
+					// Finalize transformation for unary non-streaming bodies
+					translationWriter.FlushResponse()
+					return
 				}
 
-				handleAzureProxy(c)
-				return
+				// If it supports Responses natively, restore body data unmodified
+				c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 			}
 
-			// Route other standard pathways straight to the underlying package handler
 			if strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/deployments/") {
 				handleAzureProxy(c)
 				return
