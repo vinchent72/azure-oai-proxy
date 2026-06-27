@@ -67,22 +67,37 @@ func init() {
 func main() {
 	router := gin.Default()
 
+	// Global Health Endpoint
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
 
 	if ProxyMode == "azure" {
+		// 1. Register explicit, unambiguous routes first
 		router.GET("/v1/models", handleGetModels)
-		router.OPTIONS("/v1/*path", handleOptions)
 
-		// Catch-all group for all endpoint pathways (/v1/responses, /v1/chat/completions, etc.)
-		v1Group := router.Group("/v1")
-		{
-			v1Group.Any("/*path", handleAzureProxy)
-		}
-		router.Any("/deployments/*path", handleAzureProxy)
+		// 2. Use NoRoute as a safe interceptor to handle dynamic proxies without tree collisions
+		router.NoRoute(func(c *gin.Context) {
+			path := c.Request.URL.Path
+
+			// Intercept standard OPTIONS requests
+			if c.Request.Method == http.MethodOptions {
+				handleOptions(c)
+				return
+			}
+
+			// Route standard v1 or workspace deployments pathways directly to Azure handler
+			if strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/deployments/") {
+				handleAzureProxy(c)
+				return
+			}
+
+			// Fallback for completely unmatched paths
+			c.JSON(http.StatusNotFound, gin.H{"error": "Resource path not found"})
+		})
 	} else {
-		router.Any("*path", handleOpenAIProxy)
+		// OpenAI standard proxy routing fallback
+		router.NoRoute(handleOpenAIProxy)
 	}
 
 	if err := router.Run(Address); err != nil {
