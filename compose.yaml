@@ -4,7 +4,7 @@ services:
     image: 'vinchent72/azure-oai-proxy:latest'
     # container_name: azure-oai-proxy
     # Alternatively, use GitHub Container Registry:
-    # image: 'ghcr.io/gyarbij/azure-oai-proxy:latest'
+    # image: 'ghcr.io/vinchent72/azure-oai-proxy:latest'
     restart: always
     environment:
       - FOUNDRY_API_KEY=your-foundry-api-key-here

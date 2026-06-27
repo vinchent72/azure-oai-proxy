@@ -1,4 +1,4 @@
-module github.com/gyarbij/azure-oai-proxy
+module github.com/vinchent72/azure-oai-proxy
 
 go 1.24.5
 
