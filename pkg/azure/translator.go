@@ -4,20 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 )
 
 // IsChatOnlyModel determines if a model lacks native Responses API capability
 func IsChatOnlyModel(model string) bool {
 	m := strings.ToLower(model)
-	// DeepSeek and standard third-party models on Foundry typically use standard chat/completions
 	if strings.Contains(m, "deepseek") || strings.Contains(m, "llama") || strings.Contains(m, "qwen") {
 		return true
 	}
@@ -36,10 +30,8 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 		"model": model,
 	}
 
-	// 1. Build the messages array
 	var messages []map[string]interface{}
 
-	// Extract instructions if present (map to system message)
 	if inst, ok := src["instructions"].(string); ok && inst != "" {
 		messages = append(messages, map[string]interface{}{
 			"role":    "system",
@@ -47,15 +39,14 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 		})
 	}
 
-	// Extract input field
 	if inputRaw, exists := src["input"]; exists {
-		if inputStr, ok := inputRaw.String(); ok {
+		// FIXED: Replaced .String() with native interface type assertion
+		if inputStr, ok := inputRaw.(string); ok {
 			messages = append(messages, map[string]interface{}{
 				"role":    "user",
 				"content": inputStr,
 			})
 		} else {
-			// If input is already an array of structured messages, pass them along
 			inputBytes, _ := json.Marshal(inputRaw)
 			var inputMsgs []map[string]interface{}
 			if err := json.Unmarshal(inputBytes, &inputMsgs); err == nil {
@@ -66,7 +57,6 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 
 	dst["messages"] = messages
 
-	// 2. Map structural configurations
 	if temp, ok := src["temperature"].(float64); ok {
 		dst["temperature"] = temp
 	}
@@ -102,11 +92,9 @@ func NewResponseTranslationWriter(w gin.ResponseWriter, isStream bool, model str
 
 func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 	if !w.isStream {
-		// Buffer unary payload completely to process at completion
 		return w.bodyBuffer.Write(b)
 	}
 
-	// Handle Streaming Translation (SSE data lines)
 	lines := strings.Split(string(b), "\n")
 	for _, line := range lines {
 		if line == "" {
@@ -124,7 +112,6 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 			continue
 		}
 
-		// Convert standard Chat Completion chunk to valid Responses API stream chunk
 		var chatChunk map[string]interface{}
 		if err := json.Unmarshal([]byte(dataContent), &chatChunk); err == nil {
 			choices, _ := chatChunk["choices"].([]interface{})
@@ -169,7 +156,6 @@ func (w *ResponseTranslationWriter) FlushResponse() {
 		return
 	}
 
-	// Process Unary (Standard) Response mapping
 	var chatResponse map[string]interface{}
 	if err := json.Unmarshal(w.bodyBuffer.Bytes(), &chatResponse); err != nil {
 		w.ResponseWriter.Write(w.bodyBuffer.Bytes())
@@ -190,7 +176,6 @@ func (w *ResponseTranslationWriter) FlushResponse() {
 		}
 	}
 
-	// Mirror OpenAI/Azure Responses API contract layout exactly
 	responsesAPIObject := map[string]interface{}{
 		"id":          chatResponse["id"],
 		"object":      "response",
@@ -203,8 +188,8 @@ func (w *ResponseTranslationWriter) FlushResponse() {
 	if finishReason != "" {
 		responsesAPIObject["output"] = []map[string]interface{}{
 			{
-				"type": "message",
-				"role": "assistant",
+				"type":          "message",
+				"role":          "assistant",
 				"finish_reason": finishReason,
 				"content": []map[string]interface{}{
 					{
