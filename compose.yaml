@@ -6,7 +6,11 @@ services:
     # Alternatively, use GitHub Container Registry:
     # image: 'ghcr.io/gyarbij/azure-oai-proxy:latest'
     restart: always
-    environment:\n      - FOUNDRY_API_KEY=your-foundry-api-key-here\n      - AUTH_TOKENS=sk-dev-coding-token-432323,sk-dev-another-token\n      - AZURE_FOUNDRY_REGION=westus\n      - ANTHROPIC_APIVERSION=2023-06-01
+    environment:
+      - FOUNDRY_API_KEY=your-foundry-api-key-here
+      - AUTH_TOKENS=sk-dev-coding-token-432323,sk-dev-another-token
+      - AZURE_FOUNDRY_REGION=westus
+      - ANTHROPIC_APIVERSION=2023-06-01
     # Optional: Add custom model mappings
     # - AZURE_OPENAI_MODEL_MAPPER=custom-model-1=foundry-deployment-1,custom-model-2=foundry-deployment-2
     # Optional: Override the default address and mode
