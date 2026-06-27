@@ -1,19 +1,16 @@
 # Microsoft Foundry Proxy
 
-This repository is forked from **Gyarbij/azure-oai-proxy** and modified to work with Microsoft Foundry. It is a lightweight OpenAI-compatible proxy that forwards OpenAI-format requests to Microsoft Azure Foundry/AI endpoints. This project lets applications written for the OpenAI API run against Azure Foundry deployments with minimal or no code changes.
+A lightweight OpenAI-compatible proxy that forwards OpenAI-style requests to Microsoft Foundry (Azure) endpoints. It lets applications written for the OpenAI API run against Microsoft Foundry deployments with minimal or no client changes by translating paths, headers, and payloads between the two APIs.
 
 **Key points**
-- Listens for OpenAI-compatible requests and translates them to Azure Foundry (Responses API) calls.
-- Default listening address: `0.0.0.0:11437` (configurable).
+- Listens for OpenAI-compatible requests and translates them to Microsoft Foundry (Responses API or per-deployment endpoints).
+- Default listening address: `0.0.0.0:11437` (configurable via env).
 - Exposes a small set of OpenAI-compatible endpoints (see Supported Endpoints).
-- Basic model mapping and provider configuration are defined in `main.go` and can be adapted to your environment.
+- Model mapping and provider behavior are implemented in `pkg/azure/proxy.go` and bootstrapped in `main.go`.
 
 **Status**
 - Proxy mode: `azure` (default).
-- Wire API: `responses` (default provider config).
-
-**License**
-- See the repository `LICENSE` file for license details.
+- Wire API: `responses` (default provider behavior).
 
 **Table Of Contents**
 - Overview
@@ -22,111 +19,80 @@ This repository is forked from **Gyarbij/azure-oai-proxy** and modified to work 
 - Supported Endpoints
 - Example Requests
 - Model Mapping
-- Health and Diagnostics
+- Health & Diagnostics
 - Contributing
 
+**Overview**
+This proxy accepts OpenAI-style requests (for example, `/v1/chat/completions`) and forwards them to Microsoft Foundry endpoints while performing URL, header, and payload translation. It supports workspace-level routing and serverless per-deployment routing, streaming conversion, Anthropic (Claude) compatibility, and model name mapping.
 
-Overview
---------
-This proxy accepts OpenAI-style requests (for example, `/v1/chat/completions`) and forwards them to Azure Foundry endpoints while performing the required URL, header, and payload translations. It's useful to run OpenAI-compatible tools (LangChain, Open WebUI, custom apps) against Azure-managed models without rewriting the client code.
+**Quickstart**
 
+**Prerequisites**
+- Go 1.24+ (see `go.mod`).
 
-Quickstart
-----------
-Prerequisites:
-- Go 1.20+ (this repository uses Go modules).
+**Build & Run (local)**
+- Run directly: `go run .`
+- Build a binary and run: `go build -o azure-oai-proxy .` then `./azure-oai-proxy`
 
-Build and run locally:
+The proxy listens on `0.0.0.0:11437` by default (override with `AZURE_OPENAI_PROXY_ADDRESS`).
 
-- Run directly:
+**Configuration (environment variables)**
+The proxy reads configuration from environment variables at startup. Important vars used by the code (see `main.go` and `pkg/azure/proxy.go`):
 
-  `go run .`
-
-- Build a binary and run:
-
-  `go build -o azure-oai-proxy .`
-  `./azure-oai-proxy`
-
-The proxy will listen on `0.0.0.0:11437` by default.
-
-
-Configuration
--------------
-The proxy reads a few environment variables at startup (see `main.go:1` for the code locations):
-
-- `AZURE_OPENAI_PROXY_ADDRESS` — override the listen address (default: `0.0.0.0:11437`).
+- `AZURE_OPENAI_PROXY_ADDRESS` — listen address (default: `0.0.0.0:11437`).
 - `AZURE_OPENAI_PROXY_MODE` — proxy mode (default: `azure`).
-- `FOUNDRY_PROVIDER_BASE_URL` — base URL for the Foundry provider. If not set, a fallback URL is used in the code (used to build outgoing Foundry requests).
+- `AZURE_OPENAI_MODEL_MAPPER` — comma-separated `source=target` pairs to override built-in model mappings (example: `gpt-5.4=deployment-name,gpt-5.4-mini=mini-deploy`).
+- `AZURE_FOUNDRY_REGION` — region used for serverless per-deployment routing (default: `westus`).
+- `AZURE_FOUNDRY_ENDPOINT` — workspace-level Foundry endpoint (if set, workspace routing is used).
+- `FOUNDRY_API_KEY` — server-side API key used to authenticate outgoing requests to Foundry.
+- `AUTH_TOKENS` — comma-separated list of client tokens allowed to call this proxy; requests must present one of these tokens (via `Authorization: Bearer <token>` or `api-key` header).
+- `OPENAI_API_ENDPOINT` — override target OpenAI endpoint when running in OpenAI pass-through mode (optional).
+- `ANTHROPIC_APIVERSION` — Anthropic (Claude) API version used for Claude conversions (optional).
 
-Provider configuration and model presets are defined inside `main.go`. See `main.go:1` for the initial `ModelsRegistry` and `ProvidersRegistry` declarations and defaults.
+**Supported Endpoints**
+The proxy exposes OpenAI-compatible endpoints and translates them to Foundry routes. Main endpoints:
 
+- `GET /healthz` — health check (`{"status":"healthy"}`).
+- `GET /v1/models` — list known model names (populated from the built-in mapper and `AZURE_OPENAI_MODEL_MAPPER`).
+- `OPTIONS /v1/*` — CORS preflight.
+- `ANY /v1/*` — catch-all proxy for OpenAI-style API paths (examples: `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/images/generations`, `/v1/responses`, audio endpoints).
+- `ANY /deployments/*` — pass-through for deployment-scoped provider operations.
 
-Supported Endpoints
--------------------
-The proxy exposes these OpenAI-compatible endpoints (requests are routed/translated to the configured provider):
+The proxy maps the `model` field (or `deployments/<name>` path) to a Foundry deployment name.
 
-- `GET /healthz` — health check (returns `{"status":"healthy"}`).
-- `GET /v1/models` — list the models known to the proxy (from the in-memory registry).
-- `OPTIONS /v1/*` — CORS preflight support.
-- `POST/ANY /v1/*` — catch-all proxy for OpenAI-style API paths such as:
-  - `/v1/chat/completions`
-  - `/v1/completions`
-  - `/v1/embeddings`
-  - `/v1/images/generations`
-  - `/v1/responses` (Azure Responses API)
-  - audio endpoints (transcriptions, speech)
-- `ANY /deployments/*` — pass-through for provider deployment operations.
+**Example Requests**
+The proxy accepts common OpenAI headers (`Authorization: Bearer <token>` or `api-key`).
 
-Note: This repository includes code for many OpenAI model name mappings and an extensive built-in model list — the proxy maps incoming OpenAI model names to provider deployment identifiers.
-
-
-Example Requests
-----------------
-Send OpenAI-compatible requests to the proxy. The proxy accepts the common OpenAI headers (for example `api-key` or `Authorization`), and forwards requests to the configured Foundry provider after converting the payload.
-
-Example: chat completion (curl)
+Chat completion example (curl):
 
 ```
 curl -sS -X POST http://localhost:11437/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "api-key: YOUR_API_KEY_OR_TOKEN" \
-  -d '{
-    "model": "foundry-gpt-5-mini",
-    "messages": [{"role":"user","content":"Hello from the proxy!"}],
-    "max_tokens": 200
-  }'
+  -H "Authorization: Bearer <CLIENT_TOKEN_FROM_AUTH_TOKENS>" \
+  -d '{"model": "gpt-5.4","messages": [{"role":"user","content":"Hello from the proxy!"}],"max_tokens":200}'
 ```
 
-The proxy will map `foundry-gpt-5-mini` to the configured provider model/deployment and call the provider's Responses API (or other wire API configured).
+List models:
 
+`curl -sS http://localhost:11437/v1/models`
 
-Model Mapping
--------------
-Model presets are seeded inside `main.go` using `ModelsRegistry`. Example defaults include `foundry-gpt-5-mini`, `foundry-gpt-5.4-mini`, and `foundry-gpt-5.4`.
+**Model Mapping**
+Model mappings are defined in `pkg/azure/proxy.go` (see `FoundryModelMapper` and `initializeModelMapper()`). The repo includes a large set of built-in mappings.
 
-To add or change mappings you can edit `main.go` (search for `ModelsRegistry` initialization) or extend the proxy to load model mappings from a JSON file or environment variable.
+Override or extend mappings with the `AZURE_OPENAI_MODEL_MAPPER` environment variable. Format: comma-separated `source=target` pairs (examples):
 
-Files to inspect for customization:
+`AZURE_OPENAI_MODEL_MAPPER="gpt-5.4=deployment-123,gpt-5.4-mini=mini-deploy"`
 
-- `main.go:1` — startup, `ModelsRegistry`, `ProvidersRegistry`, and environment variable handling.
-- `pkg/azure/proxy.go` and `pkg/openai/proxy.go` — translation logic between OpenAI-format requests and Azure Foundry wire formats.
+Note: `pkg/azure` lower-cases and trims mapping keys during loading.
 
-
-Health and Diagnostics
-----------------------
+**Health & Diagnostics**
 - `GET /healthz` — returns `200 OK` with `{"status":"healthy"}`.
-- Basic logging is printed to stdout on startup and when routing requests.
+- Basic logging is printed to stdout on startup and for each proxied request (see `pkg/azure/proxy.go`).
 
+Common troubleshooting steps:
+- Ensure `FOUNDRY_API_KEY` is set for outgoing Foundry authentication.
+- Verify `AUTH_TOKENS` contains the client token you send to the proxy.
+- Set `AZURE_FOUNDRY_ENDPOINT` to use workspace-level routing, or `AZURE_FOUNDRY_REGION` for per-deployment serverless routing.
 
-Contributing
-------------
-Contributions, bug reports and enhancements are welcome. If you modify model mappings or provider behavior, please document the changes and consider adding configuration options rather than hard-coding values.
-
-
-Where to look next
-------------------
-- `main.go:1` — entrypoint, model and provider registries, and routing.
-- `pkg/azure/proxy.go` — Azure Foundry request building and response handling.
-- `pkg/openai/proxy.go` — OpenAI-format parsing and normalization.
-
-
+**Contributing**
+Contributions, bug reports and enhancements are welcome. If you modify model mappings or provider behavior, please document the changes and include examples. Key files to inspect when making changes: `main.go:1`, `pkg/azure/proxy.go:1`, and `pkg/openai/proxy.go:1`.
