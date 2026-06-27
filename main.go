@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -37,6 +40,11 @@ type Capabilities struct {
 	Embeddings     bool `json:"embeddings"`
 }
 
+// Simple request inspector structure to extract the model name
+type MinimalRequestBody struct {
+	Model string `json:"model"`
+}
+
 func init() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using system environment variables")
@@ -67,36 +75,60 @@ func init() {
 func main() {
 	router := gin.Default()
 
-	// Global Health Endpoint
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
 
 	if ProxyMode == "azure" {
-		// 1. Register explicit, unambiguous routes first
 		router.GET("/v1/models", handleGetModels)
 
-		// 2. Use NoRoute as a safe interceptor to handle dynamic proxies without tree collisions
 		router.NoRoute(func(c *gin.Context) {
 			path := c.Request.URL.Path
 
-			// Intercept standard OPTIONS requests
 			if c.Request.Method == http.MethodOptions {
 				handleOptions(c)
 				return
 			}
 
-			// Route standard v1 or workspace deployments pathways directly to Azure handler
+			// DYNAMIC ROUTING FOR /v1/responses
+			if path == "/v1/responses" {
+				// Read the body bytes to look at the model payload
+				bodyBytes, err := io.ReadAll(c.Request.Body)
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read request body"})
+					return
+				}
+				// Restore the body so downstream handlers can re-read it
+				c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+				var reqBody MinimalRequestBody
+				_ = json.Unmarshal(bodyBytes, &reqBody)
+
+				// Decide the endpoint based on model type
+				modelName := strings.ToLower(reqBody.Model)
+				
+				if strings.Contains(modelName, "deepseek") {
+					// DeepSeek only supports standard Chat Completions
+					c.Request.URL.Path = "/v1/chat/completions"
+					log.Printf("[Proxy Routing] Redirected %s to /v1/chat/completions", reqBody.Model)
+				} else {
+					// Default fallback: Leave it as /v1/responses for native Azure / Reasoning models
+					log.Printf("[Proxy Routing] Retained %s on native /v1/responses", reqBody.Model)
+				}
+
+				handleAzureProxy(c)
+				return
+			}
+
+			// Route other standard pathways straight to the underlying package handler
 			if strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/deployments/") {
 				handleAzureProxy(c)
 				return
 			}
 
-			// Fallback for completely unmatched paths
 			c.JSON(http.StatusNotFound, gin.H{"error": "Resource path not found"})
 		})
 	} else {
-		// OpenAI standard proxy routing fallback
 		router.NoRoute(handleOpenAIProxy)
 	}
 
@@ -106,7 +138,6 @@ func main() {
 }
 
 func handleGetModels(c *gin.Context) {
-	// Dynamically expose native keys directly to Codex CLI
 	models := make([]Model, 0, len(azure.FoundryModelMapper))
 	for modelName := range azure.FoundryModelMapper {
 		models = append(models, Model{
@@ -138,7 +169,6 @@ func handleAzureProxy(c *gin.Context) {
 		return
 	}
 
-	// Pass context straight to your underlying pkg/azure package
 	server := azure.NewOpenAIReverseProxy()
 	server.ServeHTTP(c.Writer, c.Request)
 
