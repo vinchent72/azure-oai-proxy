@@ -85,57 +85,10 @@ func main() {
 				return
 			}
 
-			// Core Interceptor for /v1/responses targeting Chat-Only backends (e.g., DeepSeek)
 			if path == "/v1/responses" && c.Request.Body != nil {
-				bodyBytes, err := io.ReadAll(c.Request.Body)
-				if err != nil {
-					c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read request body"})
+				if handleResponsesCompatibility(c) {
 					return
 				}
-
-				modelName := gjson.GetBytes(bodyBytes, "model").String()
-				sanitizedBody, report, err := azure.SanitizeResponsesRequest(bodyBytes)
-				if err != nil {
-					c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to sanitize responses request"})
-					return
-				}
-				if len(report.DroppedTools) > 0 || report.DroppedChoice {
-					log.Printf("[Autodetect] Responses request sanitized: %s", report.String())
-				}
-
-				isStream := gjson.GetBytes(sanitizedBody, "stream").Bool()
-
-				if azure.SelectTargetAPI(modelName, path) == azure.TargetAPIChatCompletions {
-					log.Printf("[Autodetect] Model %s is chat-only. Translating payload...", modelName)
-
-					translatedBody, err := azure.TranslateResponsesToChatRequest(sanitizedBody)
-					if err != nil {
-						c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to map responses schema to chat completion"})
-						return
-					}
-
-					// Mutate Request properties for underlying package compatibility
-					c.Request.URL.Path = "/v1/chat/completions"
-					c.Request.Body = io.NopCloser(bytes.NewBuffer(translatedBody))
-					c.Request.ContentLength = int64(len(translatedBody))
-					c.Request.Header.Set("Content-Length", strconv.Itoa(len(translatedBody)))
-
-					// Instantiate our dynamic response transformation wrapper
-					translationWriter := azure.NewResponseTranslationWriter(c.Writer, isStream, modelName)
-					c.Writer = translationWriter
-
-					// Forward execution
-					handleAzureProxy(c)
-
-					// Finalize transformation for unary non-streaming bodies
-					translationWriter.FlushResponse()
-					return
-				}
-
-				// If it supports Responses natively, restore body data unmodified
-				c.Request.Body = io.NopCloser(bytes.NewBuffer(sanitizedBody))
-				c.Request.ContentLength = int64(len(sanitizedBody))
-				c.Request.Header.Set("Content-Length", strconv.Itoa(len(sanitizedBody)))
 			}
 
 			if strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/deployments/") {
@@ -152,6 +105,55 @@ func main() {
 	if err := router.Run(Address); err != nil {
 		log.Fatalf("Proxy engine failure: %v", err)
 	}
+}
+
+func handleResponsesCompatibility(c *gin.Context) bool {
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read request body"})
+		return true
+	}
+
+	modelName := gjson.GetBytes(bodyBytes, "model").String()
+	profile := azure.ResolveModelAPIProfile(modelName)
+
+	sanitizedBody, report, err := azure.SanitizeResponsesRequest(bodyBytes)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to sanitize responses request"})
+		return true
+	}
+	if len(report.DroppedTools) > 0 || report.DroppedChoice {
+		log.Printf("[Autodetect] Responses request sanitized: %s", report.String())
+	}
+
+	if !profile.RoutesResponsesToChatCompletions() {
+		restoreRequestBody(c.Request, sanitizedBody)
+		return false
+	}
+
+	log.Printf("[Autodetect] Model %s uses plain-chat compatibility. Translating payload...", modelName)
+
+	translatedBody, err := azure.TranslateResponsesToChatRequest(sanitizedBody)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to map responses schema to chat completion"})
+		return true
+	}
+
+	c.Request.URL.Path = "/v1/chat/completions"
+	restoreRequestBody(c.Request, translatedBody)
+
+	translationWriter := azure.NewResponseTranslationWriter(c.Writer, gjson.GetBytes(sanitizedBody, "stream").Bool(), modelName)
+	c.Writer = translationWriter
+
+	handleAzureProxy(c)
+	translationWriter.FlushResponse()
+	return true
+}
+
+func restoreRequestBody(request *http.Request, body []byte) {
+	request.Body = io.NopCloser(bytes.NewBuffer(body))
+	request.ContentLength = int64(len(body))
+	request.Header.Set("Content-Length", strconv.Itoa(len(body)))
 }
 
 func handleGetModels(c *gin.Context) {

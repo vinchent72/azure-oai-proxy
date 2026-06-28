@@ -78,23 +78,24 @@ func init() {
 	// This serves as the default mapping for all supported models
 	initializeModelMapper()
 
-	log.Printf("========== FOUNDRY PROXY INITIALIZED ==========")
+	modeSummary := "serverless"
 	if FoundryAPIKey != "" {
 		log.Printf("Foundry API Key: **** (stored in environment)")
 	} else {
 		log.Printf("Warning: FOUNDRY_API_KEY not set")
 	}
-	log.Printf("Allowed auth tokens: %d", len(AllowedAuthTokens))
 	if FoundryEndpoint != "" {
-		log.Printf("Routing: Microsoft Foundry (workspace-level)")
-		log.Printf("Endpoint: %s", FoundryEndpoint)
+		modeSummary = fmt.Sprintf("workspace endpoint=%s", FoundryEndpoint)
 	} else {
-		log.Printf("Routing: Microsoft Foundry (serverless per-deployment)")
-		log.Printf("Region: %s", FoundryRegion)
+		modeSummary = fmt.Sprintf("serverless region=%s", FoundryRegion)
 	}
-	log.Printf("Anthropic API Version: %s", AnthropicAPIVersion)
-	log.Printf("Total models in mapper: %d", len(FoundryModelMapper))
-	log.Printf("=============================================")
+	log.Printf(
+		"Foundry proxy initialized: routing=%s auth_tokens=%d anthropic_version=%s mapped_models=%d",
+		modeSummary,
+		len(AllowedAuthTokens),
+		AnthropicAPIVersion,
+		len(FoundryModelMapper),
+	)
 }
 
 // initializeModelMapper populates the Foundry model mapper with all supported models
@@ -387,11 +388,7 @@ func makeDirector() func(*http.Request) {
 	return func(req *http.Request) {
 		model := getModelFromRequest(req)
 		originURL := req.URL.String()
-		log.Printf("========== NEW REQUEST ==========")
-		log.Printf("Original request URL: %s", originURL)
-		log.Printf("Request method: %s", req.Method)
-		log.Printf("Request path: %s", req.URL.Path)
-		log.Printf("Model from request: %s", model)
+		log.Printf("Proxy request: method=%s path=%s model=%s original_url=%s", req.Method, req.URL.Path, model, originURL)
 
 		switch SelectTargetAPI(model, req.URL.Path) {
 		case TargetAPIAnthropicMessage:
@@ -415,7 +412,6 @@ func makeDirector() func(*http.Request) {
 		handleFoundryRequest(req, deployment, model)
 
 		log.Printf("Final proxied URL: %s", req.URL.String())
-		log.Printf("=================================")
 	}
 }
 
@@ -638,14 +634,9 @@ func modifyResponse(res *http.Response) error {
 
 	if res.StatusCode >= 400 {
 		body, _ := io.ReadAll(res.Body)
-		log.Printf("========== API ERROR ==========")
-		log.Printf("Azure API Error Response")
-		log.Printf("Status Code: %d", res.StatusCode)
-		log.Printf("Request URL: %s", res.Request.URL.String())
-		log.Printf("Request Method: %s", res.Request.Method)
+		log.Printf("Azure API error: status=%d method=%s url=%s", res.StatusCode, res.Request.Method, res.Request.URL.String())
 		log.Printf("Response Body: %s", string(body))
-		log.Printf("Response Headers: %v", res.Header)
-		log.Printf("===============================")
+		debugf("Response Headers: %v", res.Header)
 		res.Body = io.NopCloser(bytes.NewBuffer(body))
 	}
 
@@ -657,7 +648,7 @@ func convertChatToResponses(req *http.Request) {
 	if req.Body != nil {
 		body, _ := io.ReadAll(req.Body)
 
-		log.Printf("Original chat completion request: %s", string(body))
+		debugf("Original chat completion request: %s", string(body))
 
 		// Parse the chat completion request
 		model := gjson.GetBytes(body, "model").String()

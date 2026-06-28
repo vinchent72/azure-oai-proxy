@@ -43,6 +43,7 @@ The service reads configuration from environment variables at startup.
 - `FOUNDRY_API_KEY` is the server-side key used when forwarding to Foundry.
 - `AUTH_TOKENS` is a comma-separated allowlist of client tokens. Clients can send one of these in `Authorization: Bearer <token>` or `api-key`.
 - `ANTHROPIC_APIVERSION` sets the Anthropic API version used for Claude routing. Default: `2023-06-01`.
+- `AZURE_OPENAI_PROXY_DEBUG` enables verbose compatibility and stream translation logs when set to `true`, `1`, `yes`, or `on`.
 - `OPENAI_API_ENDPOINT` overrides the upstream OpenAI endpoint when `AZURE_OPENAI_PROXY_MODE=openai`.
 
 ## Routes
@@ -58,7 +59,7 @@ The service reads configuration from environment variables at startup.
 When `AZURE_OPENAI_PROXY_MODE=azure`, the proxy uses Microsoft Foundry as the upstream.
 
 - `POST /v1/chat/completions` is forwarded to Foundry chat, Responses, or Anthropic Messages depending on the model.
-- `POST /v1/responses` is proxied directly, with a special translation path for chat-only models such as DeepSeek, Llama, and Qwen.
+- `POST /v1/responses` is sanitized before forwarding. Chat-only models such as DeepSeek, Llama, and Qwen are translated to `/v1/chat/completions`, while partially compatible models can have unsupported tools removed.
 - `POST /v1/completions`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/*`, and `/v1/files` are routed through Foundry.
 - Claude-family models are converted to Anthropic Messages API format before forwarding.
 - Reasoning and Codex-style models are routed through the Responses API path.
@@ -103,6 +104,7 @@ Model resolution lives in `pkg/azure/proxy.go`. The built-in mapper covers a bro
 - Requests must include a token from `AUTH_TOKENS` when that allowlist is configured.
 - `FOUNDRY_API_KEY` is only used on the server side and is never exposed to clients.
 - The proxy logs request routing decisions and upstream errors to stdout.
+- Verbose chunk-level translation logs are disabled by default and can be enabled with `AZURE_OPENAI_PROXY_DEBUG`.
 
 ## Repository Map
 

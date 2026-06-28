@@ -11,20 +11,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// IsChatOnlyModel determines if a model lacks native Responses API capability
-func IsChatOnlyModel(model string) bool {
-	return ResolveModelAPIProfile(model).ChatOnly
-}
-
 // TranslateResponsesToChatRequest transforms a Responses API body into a standard Chat Completion body
 func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 	var src map[string]interface{}
 	if err := json.Unmarshal(resBodyBytes, &src); err != nil {
-		log.Printf("[DEBUG-ERROR] Failed to unmarshal client body: %v\n", err)
+		log.Printf("Failed to unmarshal responses request body: %v", err)
 		return nil, err
 	}
 
-	log.Printf("[DEBUG-INBOUND] Responses payload summary: %s\n", summarizeResponsesPayload(src))
+	debugf("[DEBUG-INBOUND] Responses payload summary: %s", summarizeResponsesPayload(src))
 
 	model, _ := src["model"].(string)
 	dst := map[string]interface{}{
@@ -40,7 +35,7 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 
 	// 2. Preserve root-level messages if present
 	if msgsRaw, ok := src["messages"].([]interface{}); ok {
-		log.Printf("[DEBUG-CONTEXT] Found %d root-level history messages in client payload\n", len(msgsRaw))
+		debugf("[DEBUG-CONTEXT] Found %d root-level history messages in client payload", len(msgsRaw))
 		for _, m := range msgsRaw {
 			if msgMap, ok := m.(map[string]interface{}); ok {
 				appendTranslatedMessage(&messages, getString(msgMap["role"]), msgMap["content"])
@@ -94,7 +89,7 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 	}
 
 	translatedBytes, _ := json.Marshal(dst)
-	log.Printf("[DEBUG-OUTBOUND] Chat payload summary: %s\n", summarizeChatPayload(dst))
+	debugf("[DEBUG-OUTBOUND] Chat payload summary: %s", summarizeChatPayload(dst))
 	return translatedBytes, nil
 }
 
@@ -141,7 +136,7 @@ func translateResponsesTools(rawTools interface{}) []map[string]interface{} {
 	}
 
 	if dropped > 0 {
-		log.Printf("[DEBUG-TOOLS] Dropped %d unsupported tool definitions during chat translation\n", dropped)
+		debugf("[DEBUG-TOOLS] Dropped %d unsupported tool definitions during chat translation", dropped)
 	}
 
 	return translated
@@ -375,11 +370,11 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 	contentType := strings.ToLower(w.Header().Get("Content-Type"))
 	if !w.hasStarted {
 		if statusCode >= 400 || (contentType != "" && !strings.Contains(contentType, "text/event-stream")) {
-			log.Printf("[DEBUG-STREAM-PASSTHROUGH] Passing through upstream status=%d content_type=%q without SSE rewrite\n", statusCode, contentType)
+			debugf("[DEBUG-STREAM-PASSTHROUGH] Passing through upstream status=%d content_type=%q without SSE rewrite", statusCode, contentType)
 			return w.ResponseWriter.Write(b)
 		}
 
-		log.Printf("[DEBUG-STREAM] Stream connection initiated down to client (isStream=true)\n")
+		debugf("[DEBUG-STREAM] Stream connection initiated down to client (isStream=true)")
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -397,7 +392,7 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 			continue
 		}
 
-		log.Printf("[DEBUG-BACKEND-CHUNK] Raw block from model: %s\n", line)
+		debugf("[DEBUG-BACKEND-CHUNK] Raw block from model: %s", line)
 
 		if !strings.HasPrefix(line, "data: ") {
 			continue
@@ -405,7 +400,7 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 
 		dataContent := strings.TrimPrefix(line, "data: ")
 		if dataContent == "[DONE]" {
-			log.Printf("[DEBUG-STREAM] Caught [DONE] delimiter.\n")
+			debugf("[DEBUG-STREAM] Caught [DONE] delimiter.")
 			w.sendTerminalStreamChunk()
 			w.ResponseWriter.Write([]byte("data: [DONE]\n\n"))
 			continue
@@ -439,12 +434,12 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 			}
 
 			if len(choices) == 0 {
-				log.Printf("[DEBUG-STREAM-USAGE] Ignoring usage-only chunk after translation\n")
+				debugf("[DEBUG-STREAM-USAGE] Ignoring usage-only chunk after translation")
 				continue
 			}
 
 			if w.isCompleted && finishReason == nil && !hasDelta {
-				log.Printf("[DEBUG-STREAM-SKIP] Ignoring trailing empty chunk after completion\n")
+				debugf("[DEBUG-STREAM-SKIP] Ignoring trailing empty chunk after completion")
 				continue
 			}
 
@@ -461,13 +456,13 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 				respChunk["finish_reason"] = finishReason
 				w.isCompleted = true
 				w.terminalSent = true
-				log.Printf("[DEBUG-STREAM-FINISH] DeepSeek declared natural execution end condition: %v\n", finishReason)
+				debugf("[DEBUG-STREAM-FINISH] Backend declared natural execution end condition: %v", finishReason)
 			} else {
 				respChunk["status"] = "in_progress"
 			}
 
 			chunkBytes, _ := json.Marshal(respChunk)
-			log.Printf("[DEBUG-CLIENT-CHUNK] Writing SSE chunk frame: %s\n", string(chunkBytes))
+			debugf("[DEBUG-CLIENT-CHUNK] Writing SSE chunk frame: %s", string(chunkBytes))
 			w.ResponseWriter.Write([]byte("event: response.chunk\n"))
 			w.ResponseWriter.Write([]byte(fmt.Sprintf("data: %s\n\n", string(chunkBytes))))
 		}
@@ -477,7 +472,7 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 
 func (w *ResponseTranslationWriter) sendTerminalStreamChunk() {
 	if w.terminalSent {
-		log.Printf("[DEBUG-CLIENT-TERMINAL] Skipping synthetic completed chunk because a terminal event was already sent\n")
+		debugf("[DEBUG-CLIENT-TERMINAL] Skipping synthetic completed chunk because a terminal event was already sent")
 		return
 	}
 
@@ -499,7 +494,7 @@ func (w *ResponseTranslationWriter) sendTerminalStreamChunk() {
 	}
 
 	chunkBytes, _ := json.Marshal(finalChunk)
-	log.Printf("[DEBUG-CLIENT-TERMINAL] Writing synthetic completed token barrier chunk: %s\n", string(chunkBytes))
+	debugf("[DEBUG-CLIENT-TERMINAL] Writing synthetic completed token barrier chunk: %s", string(chunkBytes))
 	w.ResponseWriter.Write([]byte("event: response.chunk\n"))
 	w.ResponseWriter.Write([]byte(fmt.Sprintf("data: %s\n\n", string(chunkBytes))))
 	w.isCompleted = true
@@ -511,10 +506,10 @@ func (w *ResponseTranslationWriter) FlushResponse() {
 		return
 	}
 
-	log.Printf("[DEBUG-UNARY] Compiling non-streaming backend string data...\n")
+	debugf("[DEBUG-UNARY] Compiling non-streaming backend string data...")
 	var chatResponse map[string]interface{}
 	if err := json.Unmarshal(w.bodyBuffer.Bytes(), &chatResponse); err != nil {
-		log.Printf("[DEBUG-UNARY-FALLBACK] Failed parsing unary json, delivering raw payload stream bytes.\n")
+		debugf("[DEBUG-UNARY-FALLBACK] Failed parsing unary json, delivering raw payload stream bytes.")
 		w.ResponseWriter.Write(w.bodyBuffer.Bytes())
 		return
 	}
@@ -557,7 +552,7 @@ func (w *ResponseTranslationWriter) FlushResponse() {
 	}
 
 	finalBytes, _ := json.Marshal(responsesAPIObject)
-	log.Printf("[DEBUG-UNARY-RESPONSE] Returning clean payload back to curl:\n%s\n", string(finalBytes))
+	debugf("[DEBUG-UNARY-RESPONSE] Returning clean payload back to curl: %s", string(finalBytes))
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(finalBytes)))
 	w.ResponseWriter.Write(finalBytes)

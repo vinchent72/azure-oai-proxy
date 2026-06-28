@@ -3,7 +3,6 @@ package azure
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 )
 
@@ -28,7 +27,7 @@ func SanitizeResponsesRequest(bodyBytes []byte) ([]byte, ResponsesSanitizationRe
 	}
 
 	filteredTools, droppedTools := sanitizeResponsesTools(src["tools"], profile)
-	if len(droppedTools) > 0 || profile.CompatibilityMode == CompatibilityModePlainChat {
+	if len(droppedTools) > 0 || profile.DropsAllResponseTools() {
 		report.DroppedTools = droppedTools
 		if len(filteredTools) > 0 {
 			src["tools"] = filteredTools
@@ -70,7 +69,7 @@ func sanitizeResponsesTools(rawTools interface{}, profile ModelAPIProfile) ([]in
 		toolName := responseToolName(tool)
 		toolType := strings.TrimSpace(getString(tool["type"]))
 
-		if profile.CompatibilityMode == CompatibilityModePlainChat {
+		if profile.DropsAllResponseTools() {
 			if toolName == "" {
 				toolName = toolType
 			}
@@ -80,7 +79,7 @@ func sanitizeResponsesTools(rawTools interface{}, profile ModelAPIProfile) ([]in
 			continue
 		}
 
-		if toolName != "" && profile.BlockedResponseTools[toolName] {
+		if profile.BlocksResponseTool(toolName) {
 			dropped = append(dropped, toolName)
 			continue
 		}
@@ -102,7 +101,7 @@ func shouldDropToolChoice(rawChoice interface{}, filteredTools []interface{}, pr
 	if rawChoice == nil {
 		return false
 	}
-	if profile.CompatibilityMode == CompatibilityModePlainChat || len(filteredTools) == 0 {
+	if profile.DropsAllResponseTools() || len(filteredTools) == 0 {
 		return true
 	}
 
@@ -151,7 +150,7 @@ func logResponsesSanitization(report ResponsesSanitizationReport) {
 		return
 	}
 
-	log.Printf(
+	debugf(
 		"[DEBUG-SANITIZE] model=%q mode=%s dropped_tools=%v dropped_tool_choice=%t\n",
 		report.Model,
 		report.Mode,

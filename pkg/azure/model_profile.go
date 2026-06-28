@@ -24,6 +24,26 @@ type ModelAPIProfile struct {
 	BlockedResponseTools  map[string]bool
 }
 
+func (p ModelAPIProfile) UsesAnthropicMessagesForChat() bool {
+	return p.UsesAnthropicMessages
+}
+
+func (p ModelAPIProfile) RoutesChatCompletionsToResponses() bool {
+	return p.PrefersResponsesAPI
+}
+
+func (p ModelAPIProfile) RoutesResponsesToChatCompletions() bool {
+	return p.ChatOnly
+}
+
+func (p ModelAPIProfile) DropsAllResponseTools() bool {
+	return p.CompatibilityMode == CompatibilityModePlainChat
+}
+
+func (p ModelAPIProfile) BlocksResponseTool(toolName string) bool {
+	return toolName != "" && p.BlockedResponseTools[toolName]
+}
+
 func ResolveModelAPIProfile(model string) ModelAPIProfile {
 	modelLower := strings.ToLower(strings.TrimSpace(model))
 
@@ -56,19 +76,21 @@ func ResolveModelAPIProfile(model string) ModelAPIProfile {
 }
 
 func SelectTargetAPI(model string, requestPath string) TargetAPI {
-	profile := ResolveModelAPIProfile(model)
+	return selectTargetAPIForProfile(ResolveModelAPIProfile(model), requestPath)
+}
 
+func selectTargetAPIForProfile(profile ModelAPIProfile, requestPath string) TargetAPI {
 	switch {
 	case strings.HasPrefix(requestPath, "/v1/chat/completions"):
-		if profile.UsesAnthropicMessages {
+		if profile.UsesAnthropicMessagesForChat() {
 			return TargetAPIAnthropicMessage
 		}
-		if profile.PrefersResponsesAPI {
+		if profile.RoutesChatCompletionsToResponses() {
 			return TargetAPIResponses
 		}
 		return TargetAPIChatCompletions
 	case strings.HasPrefix(requestPath, "/v1/responses"):
-		if profile.ChatOnly {
+		if profile.RoutesResponsesToChatCompletions() {
 			return TargetAPIChatCompletions
 		}
 		return TargetAPIResponses
