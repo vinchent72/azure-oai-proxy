@@ -40,7 +40,7 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 		})
 	}
 
-	// 2. CRITICAL FIX: If Codex CLI passes a root-level "messages" array, preserve all of them!
+	// 2. If Codex CLI passes a root-level "messages" array, preserve all of them
 	if msgsRaw, ok := src["messages"].([]interface{}); ok {
 		for _, m := range msgsRaw {
 			if msgMap, ok := m.(map[string]interface{}); ok {
@@ -110,18 +110,19 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 
 	lines := strings.Split(string(b), "\n")
 	for _, line := range lines {
+		line = strings.TrimSpace(line)
 		if line == "" {
-			w.ResponseWriter.Write([]byte("\n"))
 			continue
 		}
+		
 		if !strings.HasPrefix(line, "data: ") {
-			w.ResponseWriter.Write([]byte(line + "\n"))
 			continue
 		}
 
 		dataContent := strings.TrimPrefix(line, "data: ")
 		if dataContent == "[DONE]" {
-			w.ResponseWriter.Write([]byte("data: [DONE]\n"))
+			// Write terminal block matching OpenAI SSE streaming specification
+			w.ResponseWriter.Write([]byte("data: [DONE]\n\n"))
 			continue
 		}
 
@@ -158,7 +159,11 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 			}
 
 			chunkBytes, _ := json.Marshal(respChunk)
-			w.ResponseWriter.Write([]byte(fmt.Sprintf("data: %s\n", string(chunkBytes))))
+			
+			// FIXED: Codex CLI requires an explicit "event" block declaration for Responses wire layouts
+			// alongside a double newline (\n\n) termination for each event boundary frame.
+			w.ResponseWriter.Write([]byte("event: response.chunk\n"))
+			w.ResponseWriter.Write([]byte(fmt.Sprintf("data: %s\n\n", string(chunkBytes))))
 		}
 	}
 	return len(b), nil
