@@ -32,6 +32,7 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 
 	var messages []map[string]interface{}
 
+	// 1. Extract instructions if present (map to system message context)
 	if inst, ok := src["instructions"].(string); ok && inst != "" {
 		messages = append(messages, map[string]interface{}{
 			"role":    "system",
@@ -39,8 +40,17 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 		})
 	}
 
+	// 2. CRITICAL FIX: If Codex CLI passes a root-level "messages" array, preserve all of them!
+	if msgsRaw, ok := src["messages"].([]interface{}); ok {
+		for _, m := range msgsRaw {
+			if msgMap, ok := m.(map[string]interface{}); ok {
+				messages = append(messages, msgMap)
+			}
+		}
+	}
+
+	// 3. Extract standard standalone "input" string if present
 	if inputRaw, exists := src["input"]; exists {
-		// FIXED: Replaced .String() with native interface type assertion
 		if inputStr, ok := inputRaw.(string); ok {
 			messages = append(messages, map[string]interface{}{
 				"role":    "user",
@@ -57,6 +67,7 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 
 	dst["messages"] = messages
 
+	// Map remaining configuration options safely
 	if temp, ok := src["temperature"].(float64); ok {
 		dst["temperature"] = temp
 	}
@@ -68,6 +79,8 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 	}
 	if maxTokens, ok := src["max_output_tokens"].(float64); ok {
 		dst["max_tokens"] = int(maxTokens)
+	} else if maxTok, ok := src["max_tokens"].(float64); ok {
+		dst["max_tokens"] = int(maxTok)
 	}
 
 	return json.Marshal(dst)
