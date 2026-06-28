@@ -3,6 +3,7 @@ package azure
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -225,5 +226,37 @@ func TestResponseTranslationWriterPassesThroughStreamingErrors(t *testing.T) {
 	}
 	if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json; charset=utf-8" {
 		t.Fatalf("unexpected content type: %#v", contentType)
+	}
+}
+
+func TestResponseTranslationWriterSkipsUsageOnlyTailAndDuplicateTerminal(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+
+	writer := NewResponseTranslationWriter(context.Writer, true, "DeepSeek-V4-Flash")
+	stream := strings.Join([]string{
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"DeepSeek-V4-Flash","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"DeepSeek-V4-Flash","choices":[{"index":0,"delta":{"content":null},"finish_reason":"stop"}]}`,
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"DeepSeek-V4-Flash","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	if _, err := writer.Write([]byte(stream)); err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+
+	body := recorder.Body.String()
+	if strings.Count(body, `"status":"completed"`) != 1 {
+		t.Fatalf("expected exactly one completed chunk, got body: %s", body)
+	}
+	if strings.Count(body, `"status":"in_progress"`) != 1 {
+		t.Fatalf("expected exactly one in-progress chunk, got body: %s", body)
+	}
+	if strings.Count(body, `data: [DONE]`) != 1 {
+		t.Fatalf("expected [DONE] marker once, got body: %s", body)
 	}
 }

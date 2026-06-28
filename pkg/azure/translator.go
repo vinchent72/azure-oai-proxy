@@ -347,12 +347,14 @@ func getInt(value interface{}) int {
 // ResponseTranslationWriter captures backend Chat Completion responses and reformats them
 type ResponseTranslationWriter struct {
 	gin.ResponseWriter
-	bodyBuffer  *bytes.Buffer
-	isStream    bool
-	modelName   string
-	hasStarted  bool
-	lastChunkID string
-	lastCreated float64
+	bodyBuffer   *bytes.Buffer
+	isStream     bool
+	modelName    string
+	hasStarted   bool
+	isCompleted  bool
+	terminalSent bool
+	lastChunkID  string
+	lastCreated  float64
 }
 
 func NewResponseTranslationWriter(w gin.ResponseWriter, isStream bool, model string) *ResponseTranslationWriter {
@@ -403,7 +405,7 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 
 		dataContent := strings.TrimPrefix(line, "data: ")
 		if dataContent == "[DONE]" {
-			log.Printf("[DEBUG-STREAM] Caught [DONE] delimiter. Injecting manual response.completed sequence.\n")
+			log.Printf("[DEBUG-STREAM] Caught [DONE] delimiter.\n")
 			w.sendTerminalStreamChunk()
 			w.ResponseWriter.Write([]byte("data: [DONE]\n\n"))
 			continue
@@ -421,17 +423,29 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 			choices, _ := chatChunk["choices"].([]interface{})
 			deltaText := ""
 			finishReason := interface{}(nil)
+			hasDelta := false
 
 			if len(choices) > 0 {
 				choice := choices[0].(map[string]interface{})
 				if delta, ok := choice["delta"].(map[string]interface{}); ok {
 					if content, ok := delta["content"].(string); ok {
 						deltaText = content
+						hasDelta = true
 					}
 				}
 				if fr, ok := choice["finish_reason"]; ok && fr != nil {
 					finishReason = fr
 				}
+			}
+
+			if len(choices) == 0 {
+				log.Printf("[DEBUG-STREAM-USAGE] Ignoring usage-only chunk after translation\n")
+				continue
+			}
+
+			if w.isCompleted && finishReason == nil && !hasDelta {
+				log.Printf("[DEBUG-STREAM-SKIP] Ignoring trailing empty chunk after completion\n")
+				continue
 			}
 
 			respChunk := map[string]interface{}{
@@ -445,6 +459,8 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 			if finishReason != nil {
 				respChunk["status"] = "completed"
 				respChunk["finish_reason"] = finishReason
+				w.isCompleted = true
+				w.terminalSent = true
 				log.Printf("[DEBUG-STREAM-FINISH] DeepSeek declared natural execution end condition: %v\n", finishReason)
 			} else {
 				respChunk["status"] = "in_progress"
@@ -460,6 +476,11 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 }
 
 func (w *ResponseTranslationWriter) sendTerminalStreamChunk() {
+	if w.terminalSent {
+		log.Printf("[DEBUG-CLIENT-TERMINAL] Skipping synthetic completed chunk because a terminal event was already sent\n")
+		return
+	}
+
 	if w.lastChunkID == "" {
 		w.lastChunkID = "chatcmpl-proxy-final-id"
 	}
@@ -481,6 +502,8 @@ func (w *ResponseTranslationWriter) sendTerminalStreamChunk() {
 	log.Printf("[DEBUG-CLIENT-TERMINAL] Writing synthetic completed token barrier chunk: %s\n", string(chunkBytes))
 	w.ResponseWriter.Write([]byte("event: response.chunk\n"))
 	w.ResponseWriter.Write([]byte(fmt.Sprintf("data: %s\n\n", string(chunkBytes))))
+	w.isCompleted = true
+	w.terminalSent = true
 }
 
 func (w *ResponseTranslationWriter) FlushResponse() {
