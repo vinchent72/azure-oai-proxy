@@ -119,6 +119,7 @@ var chatOnlyModelMarkers = []string{
 }
 
 var filteredAgentModelPrefixes = []string{
+	"gpt-5-mini",
 	"grok-",
 }
 
@@ -128,6 +129,10 @@ type blockedResponseToolsRule struct {
 }
 
 var blockedResponseToolsByPrefix = []blockedResponseToolsRule{
+	{
+		prefixes: []string{"gpt-5-mini"},
+		tools:    []string{"tool_search"},
+	},
 	{
 		prefixes: []string{"grok-"},
 		tools:    []string{"image_generation"},

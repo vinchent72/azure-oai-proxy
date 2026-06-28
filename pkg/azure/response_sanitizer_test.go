@@ -44,6 +44,59 @@ func TestSanitizeResponsesRequestFilteredAgentDropsUnsupportedTools(t *testing.T
 	}
 }
 
+func TestSanitizeResponsesRequestGpt5MiniDropsToolSearch(t *testing.T) {
+	payload := []byte(`{
+		"model":"gpt-5-mini-2025-08-07",
+		"tool_choice":{"type":"function","name":"tool_search"},
+		"parallel_tool_calls":true,
+		"tools":[
+			{"type":"function","name":"tool_search","parameters":{"type":"object","properties":{"query":{"type":"string"}}}},
+			{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}}
+		],
+		"input":"hello"
+	}`)
+
+	sanitized, report, err := SanitizeResponsesRequest(payload)
+	if err != nil {
+		t.Fatalf("SanitizeResponsesRequest returned error: %v", err)
+	}
+
+	if report.Mode != CompatibilityModeFilteredAgent {
+		t.Fatalf("unexpected compatibility mode: %q", report.Mode)
+	}
+	if len(report.DroppedTools) != 1 || report.DroppedTools[0] != "tool_search" {
+		t.Fatalf("unexpected dropped tools: %#v", report.DroppedTools)
+	}
+	if !report.DroppedChoice {
+		t.Fatalf("expected tool_choice to be dropped")
+	}
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(sanitized, &got); err != nil {
+		t.Fatalf("unmarshal sanitized payload: %v", err)
+	}
+
+	tools, ok := got["tools"].([]interface{})
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected 1 remaining tool, got %#v", got["tools"])
+	}
+
+	tool, ok := tools[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected remaining tool to be an object, got %#v", tools[0])
+	}
+	if tool["name"] != "exec_command" {
+		t.Fatalf("unexpected remaining tool: %#v", tool)
+	}
+
+	if _, exists := got["tool_choice"]; exists {
+		t.Fatalf("expected tool_choice to be removed, got %#v", got["tool_choice"])
+	}
+	if _, exists := got["parallel_tool_calls"]; exists {
+		t.Fatalf("expected parallel_tool_calls to be removed when tool_choice is dropped, got %#v", got["parallel_tool_calls"])
+	}
+}
+
 func TestSanitizeResponsesRequestPlainChatDropsToolsAndChoice(t *testing.T) {
 	payload := []byte(`{
 		"model":"DeepSeek-V4-Flash",

@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func TestHandleResponsesCompatibilityLeavesFullAgentBodiesUntouched(t *testing.T) {
+func TestHandleResponsesCompatibilitySanitizesGpt5MiniToolSearch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := `{
@@ -31,7 +31,7 @@ func TestHandleResponsesCompatibilityLeavesFullAgentBodiesUntouched(t *testing.T
 
 	handled := handleResponsesCompatibility(context)
 	if handled {
-		t.Fatalf("expected full-agent request to pass through without early handling")
+		t.Fatalf("expected filtered-agent request to continue through proxy handling")
 	}
 	if context.Request.URL.Path != "/v1/responses" {
 		t.Fatalf("unexpected request path rewrite: %q", context.Request.URL.Path)
@@ -41,7 +41,18 @@ func TestHandleResponsesCompatibilityLeavesFullAgentBodiesUntouched(t *testing.T
 	if err != nil {
 		t.Fatalf("failed reading restored request body: %v", err)
 	}
-	if string(restoredBody) != body {
-		t.Fatalf("expected body to be preserved exactly, got %q", string(restoredBody))
+
+	got := string(restoredBody)
+	if strings.Contains(got, `"name":"tool_search"`) {
+		t.Fatalf("expected tool_search to be removed, got %q", got)
+	}
+	if strings.Contains(got, `"tool_choice"`) {
+		t.Fatalf("expected tool_choice to be removed, got %q", got)
+	}
+	if strings.Contains(got, `"parallel_tool_calls"`) {
+		t.Fatalf("expected parallel_tool_calls to be removed, got %q", got)
+	}
+	if !strings.Contains(got, `"name":"exec_command"`) {
+		t.Fatalf("expected exec_command tool to remain, got %q", got)
 	}
 }
