@@ -117,6 +117,11 @@ func handleResponsesCompatibility(c *gin.Context) bool {
 	modelName := gjson.GetBytes(bodyBytes, "model").String()
 	profile := azure.ResolveModelAPIProfile(modelName)
 
+	if profile.CompatibilityMode == azure.CompatibilityModeFullAgent {
+		restoreRequestBody(c.Request, bodyBytes)
+		return false
+	}
+
 	sanitizedBody, report, err := azure.SanitizeResponsesRequest(bodyBytes)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to sanitize responses request"})
