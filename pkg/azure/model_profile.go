@@ -3,11 +3,16 @@ package azure
 import "strings"
 
 type TargetAPI string
+type CompatibilityMode string
 
 const (
 	TargetAPIChatCompletions  TargetAPI = "chat_completions"
 	TargetAPIResponses        TargetAPI = "responses"
 	TargetAPIAnthropicMessage TargetAPI = "anthropic_messages"
+
+	CompatibilityModeFullAgent     CompatibilityMode = "full_agent"
+	CompatibilityModeFilteredAgent CompatibilityMode = "filtered_agent"
+	CompatibilityModePlainChat     CompatibilityMode = "plain_chat"
 )
 
 type ModelAPIProfile struct {
@@ -15,17 +20,39 @@ type ModelAPIProfile struct {
 	UsesAnthropicMessages bool
 	PrefersResponsesAPI   bool
 	ChatOnly              bool
+	CompatibilityMode     CompatibilityMode
+	BlockedResponseTools  map[string]bool
 }
 
 func ResolveModelAPIProfile(model string) ModelAPIProfile {
 	modelLower := strings.ToLower(strings.TrimSpace(model))
 
-	return ModelAPIProfile{
+	profile := ModelAPIProfile{
 		Model:                 model,
 		UsesAnthropicMessages: hasAnyPrefix(modelLower, claudeModelPrefixes),
 		PrefersResponsesAPI:   hasAnyPrefix(modelLower, responsesModelPrefixes),
 		ChatOnly:              hasAnySubstring(modelLower, chatOnlyModelMarkers),
+		CompatibilityMode:     CompatibilityModeFullAgent,
+		BlockedResponseTools:  make(map[string]bool),
 	}
+
+	if profile.ChatOnly {
+		profile.CompatibilityMode = CompatibilityModePlainChat
+	}
+
+	if hasAnyPrefix(modelLower, filteredAgentModelPrefixes) {
+		profile.CompatibilityMode = CompatibilityModeFilteredAgent
+	}
+
+	for _, toolName := range blockedResponseToolsByPrefix {
+		if hasAnyPrefix(modelLower, toolName.prefixes) {
+			for _, blockedTool := range toolName.tools {
+				profile.BlockedResponseTools[blockedTool] = true
+			}
+		}
+	}
+
+	return profile
 }
 
 func SelectTargetAPI(model string, requestPath string) TargetAPI {
@@ -67,6 +94,22 @@ var responsesModelPrefixes = []string{
 
 var chatOnlyModelMarkers = []string{
 	"deepseek", "llama", "qwen",
+}
+
+var filteredAgentModelPrefixes = []string{
+	"grok-",
+}
+
+type blockedResponseToolsRule struct {
+	prefixes []string
+	tools    []string
+}
+
+var blockedResponseToolsByPrefix = []blockedResponseToolsRule{
+	{
+		prefixes: []string{"grok-"},
+		tools:    []string{"image_generation"},
+	},
 }
 
 func hasAnyPrefix(value string, prefixes []string) bool {

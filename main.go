@@ -94,12 +94,21 @@ func main() {
 				}
 
 				modelName := gjson.GetBytes(bodyBytes, "model").String()
-				isStream := gjson.GetBytes(bodyBytes, "stream").Bool()
+				sanitizedBody, report, err := azure.SanitizeResponsesRequest(bodyBytes)
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to sanitize responses request"})
+					return
+				}
+				if len(report.DroppedTools) > 0 || report.DroppedChoice {
+					log.Printf("[Autodetect] Responses request sanitized: %s", report.String())
+				}
+
+				isStream := gjson.GetBytes(sanitizedBody, "stream").Bool()
 
 				if azure.SelectTargetAPI(modelName, path) == azure.TargetAPIChatCompletions {
 					log.Printf("[Autodetect] Model %s is chat-only. Translating payload...", modelName)
 
-					translatedBody, err := azure.TranslateResponsesToChatRequest(bodyBytes)
+					translatedBody, err := azure.TranslateResponsesToChatRequest(sanitizedBody)
 					if err != nil {
 						c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to map responses schema to chat completion"})
 						return
@@ -124,7 +133,9 @@ func main() {
 				}
 
 				// If it supports Responses natively, restore body data unmodified
-				c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+				c.Request.Body = io.NopCloser(bytes.NewBuffer(sanitizedBody))
+				c.Request.ContentLength = int64(len(sanitizedBody))
+				c.Request.Header.Set("Content-Length", strconv.Itoa(len(sanitizedBody)))
 			}
 
 			if strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/deployments/") {

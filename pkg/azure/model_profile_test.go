@@ -24,12 +24,28 @@ func TestResolveModelAPIProfile(t *testing.T) {
 		if profile.UsesAnthropicMessages {
 			t.Fatalf("did not expect Codex profile to use Anthropic Messages")
 		}
+		if profile.CompatibilityMode != CompatibilityModeFullAgent {
+			t.Fatalf("expected Codex profile to stay in full agent mode")
+		}
 	})
 
 	t.Run("deepseek is chat only", func(t *testing.T) {
 		profile := ResolveModelAPIProfile("DeepSeek-V4-Flash")
 		if !profile.ChatOnly {
 			t.Fatalf("expected DeepSeek profile to be chat-only")
+		}
+		if profile.CompatibilityMode != CompatibilityModePlainChat {
+			t.Fatalf("expected DeepSeek profile to use plain chat compatibility mode")
+		}
+	})
+
+	t.Run("grok uses filtered agent mode", func(t *testing.T) {
+		profile := ResolveModelAPIProfile("grok-4.3")
+		if profile.CompatibilityMode != CompatibilityModeFilteredAgent {
+			t.Fatalf("expected Grok profile to use filtered agent mode")
+		}
+		if !profile.BlockedResponseTools["image_generation"] {
+			t.Fatalf("expected Grok profile to block image_generation")
 		}
 	})
 }
