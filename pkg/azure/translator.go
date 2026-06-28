@@ -74,9 +74,9 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 	if topP, ok := src["top_p"].(float64); ok {
 		dst["top_p"] = topP
 	}
-	if stream, ok := src["stream"].(bool); ok {
-		dst["stream"] = stream
-	}
+	// Force backend stream to always ensure uniform chunked transfer encoding pipeline for Codex CLI
+	dst["stream"] = true
+
 	if maxTokens, ok := src["max_output_tokens"].(float64); ok {
 		dst["max_tokens"] = int(maxTokens)
 	} else if maxTok, ok := src["max_tokens"].(float64); ok {
@@ -92,6 +92,7 @@ type ResponseTranslationWriter struct {
 	bodyBuffer *bytes.Buffer
 	isStream   bool
 	modelName  string
+	hasStarted bool
 }
 
 func NewResponseTranslationWriter(w gin.ResponseWriter, isStream bool, model string) *ResponseTranslationWriter {
@@ -104,25 +105,28 @@ func NewResponseTranslationWriter(w gin.ResponseWriter, isStream bool, model str
 }
 
 func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
-	if !w.isStream {
-		return w.bodyBuffer.Write(b)
+	// Set appropriate chunked streaming headers on the very first incoming data package frame
+	if !w.hasStarted {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Transfer-Encoding", "chunked")
+		w.WriteHeader(200)
+		w.hasStarted = true
 	}
 
 	lines := strings.Split(string(b), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		
-		if !strings.HasPrefix(line, "data: ") {
+		if line == "" || !strings.HasPrefix(line, "data: ") {
 			continue
 		}
 
 		dataContent := strings.TrimPrefix(line, "data: ")
 		if dataContent == "[DONE]" {
-			// Write terminal block matching OpenAI SSE streaming specification
-			w.ResponseWriter.Write([]byte("data: [DONE]\n\n"))
+			if w.isStream {
+				w.ResponseWriter.Write([]byte("data: [DONE]\n\n"))
+			}
 			continue
 		}
 
@@ -144,6 +148,13 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 				}
 			}
 
+			// Capture data internally if the client requested a standard single block response
+			if !w.isStream {
+				w.bodyBuffer.WriteString(deltaText)
+				continue
+			}
+
+			// Active Stream Formatting (Real-time updates)
 			respChunk := map[string]interface{}{
 				"id":          chatChunk["id"],
 				"object":      "response.chunk",
@@ -159,9 +170,6 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 			}
 
 			chunkBytes, _ := json.Marshal(respChunk)
-			
-			// FIXED: Codex CLI requires an explicit "event" block declaration for Responses wire layouts
-			// alongside a double newline (\n\n) termination for each event boundary frame.
 			w.ResponseWriter.Write([]byte("event: response.chunk\n"))
 			w.ResponseWriter.Write([]byte(fmt.Sprintf("data: %s\n\n", string(chunkBytes))))
 		}
@@ -174,52 +182,35 @@ func (w *ResponseTranslationWriter) FlushResponse() {
 		return
 	}
 
-	var chatResponse map[string]interface{}
-	if err := json.Unmarshal(w.bodyBuffer.Bytes(), &chatResponse); err != nil {
-		w.ResponseWriter.Write(w.bodyBuffer.Bytes())
-		return
-	}
-
-	choices, _ := chatResponse["choices"].([]interface{})
-	outputText := ""
-	finishReason := "stop"
-
-	if len(choices) > 0 {
-		choice := choices[0].(map[string]interface{})
-		if msg, ok := choice["message"].(map[string]interface{}); ok {
-			outputText, _ = msg["content"].(string)
-		}
-		if fr, ok := choice["finish_reason"].(string); ok && fr != "" {
-			finishReason = fr
-		}
-	}
-
+	// For non-streaming requests, deliver the collected text chunk wrapped as a fast chunk-transfer frame.
+	outputText := w.bodyBuffer.String()
+	
 	responsesAPIObject := map[string]interface{}{
-		"id":          chatResponse["id"],
+		"id":          "chatcmpl-proxy-generated-id",
 		"object":      "response",
-		"created_at":  chatResponse["created"],
+		"created_at":  1782607675,
 		"model":       w.modelName,
 		"status":      "completed",
 		"output_text": outputText,
-		"usage":       chatResponse["usage"],
 	}
-	if finishReason != "" {
-		responsesAPIObject["output"] = []map[string]interface{}{
-			{
-				"type":          "message",
-				"role":          "assistant",
-				"finish_reason": finishReason,
-				"content": []map[string]interface{}{
-					{
-						"type": "output_text",
-						"text": outputText,
-					},
+	responsesAPIObject["output"] = []map[string]interface{}{
+		{
+			"type":          "message",
+			"role":          "assistant",
+			"finish_reason": "stop",
+			"content": []map[string]interface{}{
+				{
+					"type": "output_text",
+					"text": outputText,
 				},
 			},
-		}
+		},
 	}
 
 	finalBytes, _ := json.Marshal(responsesAPIObject)
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(finalBytes)))
-	w.ResponseWriter.Write(finalBytes)
+	
+	// Deliver both structural elements to finalize standard calls via chunk streams
+	w.ResponseWriter.Write([]byte("event: response.chunk\n"))
+	w.ResponseWriter.Write([]byte(fmt.Sprintf("data: %s\n\n", string(finalBytes))))
+	w.ResponseWriter.Write([]byte("data: [DONE]\n\n"))
 }
