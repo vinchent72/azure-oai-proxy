@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -21,13 +22,13 @@ func IsChatOnlyModel(model string) bool {
 
 // TranslateResponsesToChatRequest transforms a Responses API body into a standard Chat Completion body
 func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
-	log.Printf("[DEBUG-INBOUND] Raw payload received from client:\n%s\n", string(resBodyBytes))
-
 	var src map[string]interface{}
 	if err := json.Unmarshal(resBodyBytes, &src); err != nil {
 		log.Printf("[DEBUG-ERROR] Failed to unmarshal client body: %v\n", err)
 		return nil, err
 	}
+
+	log.Printf("[DEBUG-INBOUND] Responses payload summary: %s\n", summarizeResponsesPayload(src))
 
 	model, _ := src["model"].(string)
 	dst := map[string]interface{}{
@@ -38,10 +39,7 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 
 	// 1. Extract instructions if present
 	if inst, ok := src["instructions"].(string); ok && inst != "" {
-		messages = append(messages, map[string]interface{}{
-			"role":    "system",
-			"content": inst,
-		})
+		appendTranslatedMessage(&messages, "system", inst)
 	}
 
 	// 2. Preserve root-level messages if present
@@ -49,7 +47,7 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 		log.Printf("[DEBUG-CONTEXT] Found %d root-level history messages in client payload\n", len(msgsRaw))
 		for _, m := range msgsRaw {
 			if msgMap, ok := m.(map[string]interface{}); ok {
-				messages = append(messages, msgMap)
+				appendTranslatedMessage(&messages, getString(msgMap["role"]), msgMap["content"])
 			}
 		}
 	}
@@ -57,15 +55,16 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 	// 3. Extract standard standalone input
 	if inputRaw, exists := src["input"]; exists {
 		if inputStr, ok := inputRaw.(string); ok {
-			messages = append(messages, map[string]interface{}{
-				"role":    "user",
-				"content": inputStr,
-			})
+			appendTranslatedMessage(&messages, "user", inputStr)
 		} else {
-			inputBytes, _ := json.Marshal(inputRaw)
-			var inputMsgs []map[string]interface{}
-			if err := json.Unmarshal(inputBytes, &inputMsgs); err == nil {
-				messages = append(messages, inputMsgs...)
+			if inputMsgs, ok := inputRaw.([]interface{}); ok {
+				for _, item := range inputMsgs {
+					inputMsg, ok := item.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					appendTranslatedMessage(&messages, getString(inputMsg["role"]), inputMsg["content"])
+				}
 			}
 		}
 	}
@@ -88,18 +87,165 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 		dst["max_tokens"] = int(maxTok)
 	}
 
+	if tools, ok := src["tools"]; ok && tools != nil {
+		dst["tools"] = tools
+	}
+	if toolChoice, ok := src["tool_choice"]; ok && toolChoice != nil {
+		dst["tool_choice"] = toolChoice
+	}
+	if parallelToolCalls, ok := src["parallel_tool_calls"].(bool); ok {
+		dst["parallel_tool_calls"] = parallelToolCalls
+	}
+
 	translatedBytes, _ := json.Marshal(dst)
-	log.Printf("[DEBUG-OUTBOUND] Translated payload forcing downstream:\n%s\n", string(translatedBytes))
+	log.Printf("[DEBUG-OUTBOUND] Chat payload summary: %s\n", summarizeChatPayload(dst))
 	return translatedBytes, nil
+}
+
+func appendTranslatedMessage(messages *[]map[string]interface{}, role string, content interface{}) {
+	normalizedRole := normalizeChatRole(role)
+	if normalizedRole == "" {
+		return
+	}
+
+	text := extractMessageText(content)
+	if text == "" {
+		return
+	}
+
+	*messages = append(*messages, map[string]interface{}{
+		"role":    normalizedRole,
+		"content": text,
+	})
+}
+
+func normalizeChatRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "developer", "system":
+		return "system"
+	case "user":
+		return "user"
+	case "assistant":
+		return "assistant"
+	case "tool":
+		return "tool"
+	default:
+		return ""
+	}
+}
+
+func extractMessageText(content interface{}) string {
+	switch typed := content.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case []interface{}:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text := extractContentPartText(item)
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n\n")
+	case map[string]interface{}:
+		return strings.TrimSpace(getString(typed["text"]))
+	default:
+		return ""
+	}
+}
+
+func extractContentPartText(part interface{}) string {
+	switch typed := part.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case map[string]interface{}:
+		if text := strings.TrimSpace(getString(typed["text"])); text != "" {
+			return text
+		}
+		if nested := extractMessageText(typed["content"]); nested != "" {
+			return nested
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
+func summarizeResponsesPayload(src map[string]interface{}) string {
+	messageCount := countArrayEntries(src["messages"])
+	inputCount := countArrayEntries(src["input"])
+	toolCount := countArrayEntries(src["tools"])
+	fields := make([]string, 0, len(src))
+	for key := range src {
+		if key == "instructions" || key == "input" || key == "messages" || key == "tools" {
+			continue
+		}
+		fields = append(fields, key)
+	}
+	sort.Strings(fields)
+
+	return fmt.Sprintf(
+		"model=%q instructions_chars=%d input_items=%d root_messages=%d tools=%d stream=%t extra_fields=%v",
+		getString(src["model"]),
+		len(getString(src["instructions"])),
+		inputCount,
+		messageCount,
+		toolCount,
+		getBool(src["stream"]),
+		fields,
+	)
+}
+
+func summarizeChatPayload(src map[string]interface{}) string {
+	return fmt.Sprintf(
+		"model=%q messages=%d tools=%d stream=%t max_tokens=%d",
+		getString(src["model"]),
+		countArrayEntries(src["messages"]),
+		countArrayEntries(src["tools"]),
+		getBool(src["stream"]),
+		getInt(src["max_tokens"]),
+	)
+}
+
+func countArrayEntries(value interface{}) int {
+	switch typed := value.(type) {
+	case []interface{}:
+		return len(typed)
+	case []map[string]interface{}:
+		return len(typed)
+	default:
+		return 0
+	}
+}
+
+func getString(value interface{}) string {
+	text, _ := value.(string)
+	return text
+}
+
+func getBool(value interface{}) bool {
+	flag, _ := value.(bool)
+	return flag
+}
+
+func getInt(value interface{}) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
 }
 
 // ResponseTranslationWriter captures backend Chat Completion responses and reformats them
 type ResponseTranslationWriter struct {
 	gin.ResponseWriter
-	bodyBuffer *bytes.Buffer
-	isStream   bool
-	modelName  string
-	hasStarted bool
+	bodyBuffer  *bytes.Buffer
+	isStream    bool
+	modelName   string
+	hasStarted  bool
 	lastChunkID string
 	lastCreated float64
 }
@@ -134,7 +280,7 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 		if line == "" {
 			continue
 		}
-		
+
 		log.Printf("[DEBUG-BACKEND-CHUNK] Raw block from model: %s\n", line)
 
 		if !strings.HasPrefix(line, "data: ") {

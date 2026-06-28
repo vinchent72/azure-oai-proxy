@@ -6,13 +6,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/vinchent72/azure-oai-proxy/pkg/azure"
-	"github.com/vinchent72/azure-oai-proxy/pkg/openai"
 	"github.com/joho/godotenv"
 	"github.com/tidwall/gjson"
+	"github.com/vinchent72/azure-oai-proxy/pkg/azure"
+	"github.com/vinchent72/azure-oai-proxy/pkg/openai"
 )
 
 var (
@@ -97,7 +98,7 @@ func main() {
 
 				if azure.IsChatOnlyModel(modelName) {
 					log.Printf("[Autodetect] Model %s is chat-only. Translating payload...", modelName)
-					
+
 					translatedBody, err := azure.TranslateResponsesToChatRequest(bodyBytes)
 					if err != nil {
 						c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to map responses schema to chat completion"})
@@ -108,7 +109,7 @@ func main() {
 					c.Request.URL.Path = "/v1/chat/completions"
 					c.Request.Body = io.NopCloser(bytes.NewBuffer(translatedBody))
 					c.Request.ContentLength = int64(len(translatedBody))
-					c.Request.Header.Set("Content-Length", string(len(translatedBody)))
+					c.Request.Header.Set("Content-Length", strconv.Itoa(len(translatedBody)))
 
 					// Instantiate our dynamic response transformation wrapper
 					translationWriter := azure.NewResponseTranslationWriter(c.Writer, isStream, modelName)
