@@ -19,12 +19,12 @@ import (
 
 var (
 	// Foundry API Configuration
-	FoundryAPIKey        = ""                  // API key for Foundry authentication (stored server-side)
-	AllowedAuthTokens    = make(map[string]bool) // Allowed client auth tokens for access control
-	FoundryRegion        = "westus"             // Default region for Foundry deployments (used for serverless endpoints)
-	FoundryEndpoint      = ""                   // Workspace-level endpoint (if set, overrides serverless per-deployment routing)
-	AnthropicAPIVersion  = "2023-06-01"         // Anthropic API version for Claude models
-	FoundryModelMapper   = make(map[string]string) // Maps OpenAI model names to Foundry deployment names
+	FoundryAPIKey       = ""                      // API key for Foundry authentication (stored server-side)
+	AllowedAuthTokens   = make(map[string]bool)   // Allowed client auth tokens for access control
+	FoundryRegion       = "westus"                // Default region for Foundry deployments (used for serverless endpoints)
+	FoundryEndpoint     = ""                      // Workspace-level endpoint (if set, overrides serverless per-deployment routing)
+	AnthropicAPIVersion = "2023-06-01"            // Anthropic API version for Claude models
+	FoundryModelMapper  = make(map[string]string) // Maps OpenAI model names to Foundry deployment names
 )
 
 func init() {
@@ -32,7 +32,7 @@ func init() {
 	if v := os.Getenv("FOUNDRY_API_KEY"); v != "" {
 		FoundryAPIKey = v
 	}
-	
+
 	// Load allowed auth tokens from environment (comma-separated)
 	if v := os.Getenv("AUTH_TOKENS"); v != "" {
 		for _, token := range strings.Split(v, ",") {
@@ -47,17 +47,17 @@ func init() {
 			}
 		}
 	}
-	
+
 	// Load region from environment (defaults to westus)
 	if v := os.Getenv("AZURE_FOUNDRY_REGION"); v != "" {
 		FoundryRegion = v
 	}
-	
+
 	// Load workspace-level endpoint if specified (e.g., https://workspace.openai.azure.com/openai/v1)
 	if v := os.Getenv("AZURE_FOUNDRY_ENDPOINT"); v != "" {
 		FoundryEndpoint = v
 	}
-	
+
 	// Load Anthropic API version if specified
 	if v := os.Getenv("ANTHROPIC_APIVERSION"); v != "" {
 		AnthropicAPIVersion = v
@@ -349,7 +349,7 @@ func NewOpenAIReverseProxy() *httputil.ReverseProxy {
 
 func HandleToken(req *http.Request) {
 	model := getModelFromRequest(req)
-	
+
 	// Extract auth token from request (can be in "Authorization: Bearer" or "api-key" header)
 	authToken := req.Header.Get("Authorization")
 	if strings.HasPrefix(authToken, "Bearer ") {
@@ -357,12 +357,12 @@ func HandleToken(req *http.Request) {
 	} else {
 		authToken = req.Header.Get("api-key")
 	}
-	
+
 	if authToken == "" {
 		log.Printf("Warning: No auth token found for model: %s", model)
 		return
 	}
-	
+
 	// Validate auth token against allowed tokens
 	if !AllowedAuthTokens[authToken] {
 		log.Printf("ERROR: Invalid auth token for model: %s - token not in allowed list", model)
@@ -371,13 +371,13 @@ func HandleToken(req *http.Request) {
 		req.Header.Del("api-key")
 		return
 	}
-	
+
 	// Auth token is valid - use the stored Foundry API key for Foundry authentication
 	if FoundryAPIKey == "" {
 		log.Printf("ERROR: FOUNDRY_API_KEY not set in environment for model: %s", model)
 		return
 	}
-	
+
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", FoundryAPIKey))
 	req.Header.Del("api-key")
 	log.Printf("Valid auth token accepted - using stored Foundry API key for model: %s", model)
@@ -393,17 +393,15 @@ func makeDirector() func(*http.Request) {
 		log.Printf("Request path: %s", req.URL.Path)
 		log.Printf("Model from request: %s", model)
 
-		// Check if this is a Claude model - use Anthropic Messages API
-		if isClaudeModel(model) && strings.HasPrefix(req.URL.Path, "/v1/chat/completions") {
-			log.Printf("Model %s is a Claude model - converting to Anthropic Messages API format", model)
+		switch SelectTargetAPI(model, req.URL.Path) {
+		case TargetAPIAnthropicMessage:
+			log.Printf("Model %s is routed to Anthropic Messages API", model)
 			convertChatToAnthropicMessages(req, model)
-		}
-
-		// Check if this is a chat completion request for a model that should use Responses API
-		if strings.HasPrefix(req.URL.Path, "/v1/chat/completions") && shouldUseResponsesAPI(model) {
-			log.Printf("Model %s requires Responses API - converting from chat/completions", model)
-			// Convert the chat completion request to a responses request
-			convertChatToResponses(req)
+		case TargetAPIResponses:
+			if strings.HasPrefix(req.URL.Path, "/v1/chat/completions") {
+				log.Printf("Model %s is routed to Responses API", model)
+				convertChatToResponses(req)
+			}
 		}
 
 		// Handle the token
@@ -428,10 +426,10 @@ func handleFoundryRequest(req *http.Request, deployment string, model string) {
 	if FoundryEndpoint != "" {
 		// Workspace-level routing
 		log.Printf("Routing to Foundry workspace endpoint: %s, model=%s", FoundryEndpoint, model)
-		
+
 		// Parse the workspace endpoint
 		baseURL := FoundryEndpoint
-		
+
 		// Convert /v1/* paths to the workspace endpoint format
 		var endpointPath string
 		switch {
@@ -460,12 +458,12 @@ func handleFoundryRequest(req *http.Request, deployment string, model string) {
 				endpointPath = "/"
 			}
 		}
-		
+
 		// Build full URL: https://workspace.openai.azure.com/openai/v1/chat/completions
 		fullURL := baseURL + endpointPath
 		req.URL, _ = url.Parse(fullURL)
 		req.Host = req.URL.Host
-		
+
 		log.Printf("Workspace endpoint URL: %s", req.URL.String())
 	} else {
 		// Serverless per-deployment routing
@@ -515,7 +513,7 @@ func handleFoundryRequest(req *http.Request, deployment string, model string) {
 
 	// Use Bearer token authentication
 	// Note: HandleToken() is called in makeDirector() before this, so authorization is already set
-	
+
 	// Set Anthropic version header if needed
 	if strings.Contains(req.URL.Path, "/anthropic/") {
 		req.Header.Set("anthropic-version", AnthropicAPIVersion)
@@ -652,49 +650,6 @@ func modifyResponse(res *http.Response) error {
 	}
 
 	return nil
-}
-
-// Add a function to check if a model is Claude model
-func isClaudeModel(model string) bool {
-	modelLower := strings.ToLower(model)
-	claudePrefixes := []string{
-		"claude-opus", "claude-sonnet", "claude-haiku",
-		"claude-3", "claude-4",
-	}
-
-	for _, prefix := range claudePrefixes {
-		if strings.HasPrefix(modelLower, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// Add a function to check if a model should use Responses API
-func shouldUseResponsesAPI(model string) bool {
-	modelLower := strings.ToLower(model)
-	// Models that should use Responses API instead of chat completions
-	// These are primarily reasoning models and codex models
-	responsesModels := []string{
-		// O-series reasoning models
-		"o1", "o1-preview", "o1-mini",
-		"o3", "o3-mini", "o3-pro", "o3-deep-research",
-		"o4", "o4-mini",
-		// Codex models (Responses API only)
-		"codex-mini",
-		"gpt-5.1-codex", "gpt-5-codex",
-		// GPT-5 Pro (Responses API only)
-		"gpt-5-pro",
-		// Computer use preview (Responses API only)
-		"computer-use-preview",
-	}
-
-	for _, m := range responsesModels {
-		if strings.HasPrefix(modelLower, m) {
-			return true
-		}
-	}
-	return false
 }
 
 // Function to convert chat completion request to responses format

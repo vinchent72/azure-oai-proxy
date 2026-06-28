@@ -96,7 +96,7 @@ func main() {
 				modelName := gjson.GetBytes(bodyBytes, "model").String()
 				isStream := gjson.GetBytes(bodyBytes, "stream").Bool()
 
-				if azure.IsChatOnlyModel(modelName) {
+				if azure.SelectTargetAPI(modelName, path) == azure.TargetAPIChatCompletions {
 					log.Printf("[Autodetect] Model %s is chat-only. Translating payload...", modelName)
 
 					translatedBody, err := azure.TranslateResponsesToChatRequest(bodyBytes)

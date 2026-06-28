@@ -13,11 +13,7 @@ import (
 
 // IsChatOnlyModel determines if a model lacks native Responses API capability
 func IsChatOnlyModel(model string) bool {
-	m := strings.ToLower(model)
-	if strings.Contains(m, "deepseek") || strings.Contains(m, "llama") || strings.Contains(m, "qwen") {
-		return true
-	}
-	return false
+	return ResolveModelAPIProfile(model).ChatOnly
 }
 
 // TranslateResponsesToChatRequest transforms a Responses API body into a standard Chat Completion body
@@ -87,14 +83,14 @@ func TranslateResponsesToChatRequest(resBodyBytes []byte) ([]byte, error) {
 		dst["max_tokens"] = int(maxTok)
 	}
 
-	if tools, ok := src["tools"]; ok && tools != nil {
-		dst["tools"] = tools
-	}
-	if toolChoice, ok := src["tool_choice"]; ok && toolChoice != nil {
-		dst["tool_choice"] = toolChoice
-	}
-	if parallelToolCalls, ok := src["parallel_tool_calls"].(bool); ok {
-		dst["parallel_tool_calls"] = parallelToolCalls
+	if translatedTools := translateResponsesTools(src["tools"]); len(translatedTools) > 0 {
+		dst["tools"] = translatedTools
+		if toolChoice := translateToolChoice(src["tool_choice"]); toolChoice != nil {
+			dst["tool_choice"] = toolChoice
+		}
+		if parallelToolCalls, ok := src["parallel_tool_calls"].(bool); ok {
+			dst["parallel_tool_calls"] = parallelToolCalls
+		}
 	}
 
 	translatedBytes, _ := json.Marshal(dst)
@@ -117,6 +113,115 @@ func appendTranslatedMessage(messages *[]map[string]interface{}, role string, co
 		"role":    normalizedRole,
 		"content": text,
 	})
+}
+
+func translateResponsesTools(rawTools interface{}) []map[string]interface{} {
+	tools, ok := rawTools.([]interface{})
+	if !ok {
+		return nil
+	}
+
+	translated := make([]map[string]interface{}, 0, len(tools))
+	dropped := 0
+
+	for _, item := range tools {
+		tool, ok := item.(map[string]interface{})
+		if !ok {
+			dropped++
+			continue
+		}
+
+		translatedTool, ok := translateResponsesTool(tool)
+		if !ok {
+			dropped++
+			continue
+		}
+
+		translated = append(translated, translatedTool)
+	}
+
+	if dropped > 0 {
+		log.Printf("[DEBUG-TOOLS] Dropped %d unsupported tool definitions during chat translation\n", dropped)
+	}
+
+	return translated
+}
+
+func translateResponsesTool(tool map[string]interface{}) (map[string]interface{}, bool) {
+	name := strings.TrimSpace(getString(tool["name"]))
+	if name == "" {
+		name = deriveToolName(tool)
+	}
+	if name == "" {
+		return nil, false
+	}
+
+	parameters, ok := tool["parameters"].(map[string]interface{})
+	if !ok || parameters == nil {
+		parameters = map[string]interface{}{
+			"type":                 "object",
+			"properties":           map[string]interface{}{},
+			"additionalProperties": true,
+		}
+	}
+
+	description := strings.TrimSpace(getString(tool["description"]))
+	if description == "" {
+		description = fmt.Sprintf("Proxy-translated tool for %s.", name)
+	}
+
+	if originalType := strings.TrimSpace(getString(tool["type"])); originalType != "" && originalType != "function" {
+		description = fmt.Sprintf("%s Original Responses tool type: %s.", description, originalType)
+	}
+
+	return map[string]interface{}{
+		"type": "function",
+		"function": map[string]interface{}{
+			"name":        name,
+			"description": description,
+			"parameters":  parameters,
+		},
+	}, true
+}
+
+func deriveToolName(tool map[string]interface{}) string {
+	switch strings.TrimSpace(getString(tool["type"])) {
+	case "web_search":
+		return "web_search"
+	case "image_generation":
+		return "image_generation"
+	default:
+		return ""
+	}
+}
+
+func translateToolChoice(rawChoice interface{}) interface{} {
+	switch typed := rawChoice.(type) {
+	case string:
+		choice := strings.TrimSpace(typed)
+		if choice == "" {
+			return nil
+		}
+		return choice
+	case map[string]interface{}:
+		name := strings.TrimSpace(getString(typed["name"]))
+		if name == "" {
+			if functionMap, ok := typed["function"].(map[string]interface{}); ok {
+				name = strings.TrimSpace(getString(functionMap["name"]))
+			}
+		}
+		if name == "" {
+			return nil
+		}
+		return map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name": name,
+			},
+		}
+	default:
+		return nil
+	}
 }
 
 func normalizeChatRole(role string) string {
@@ -264,13 +369,22 @@ func (w *ResponseTranslationWriter) Write(b []byte) (int, error) {
 		return w.bodyBuffer.Write(b)
 	}
 
+	statusCode := w.ResponseWriter.Status()
+	contentType := strings.ToLower(w.Header().Get("Content-Type"))
 	if !w.hasStarted {
+		if statusCode >= 400 || (contentType != "" && !strings.Contains(contentType, "text/event-stream")) {
+			log.Printf("[DEBUG-STREAM-PASSTHROUGH] Passing through upstream status=%d content_type=%q without SSE rewrite\n", statusCode, contentType)
+			return w.ResponseWriter.Write(b)
+		}
+
 		log.Printf("[DEBUG-STREAM] Stream connection initiated down to client (isStream=true)\n")
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("Transfer-Encoding", "chunked")
-		w.WriteHeader(200)
+		if !w.ResponseWriter.Written() {
+			w.WriteHeader(200)
+		}
 		w.hasStarted = true
 	}
 
